@@ -3,6 +3,7 @@
   "name": "NikaS Water Accounting",
   "codeowners": ["@NikaSir"],
   "config_flow": true,
+  "dependencies": ["http", "panel_custom"],
   "documentation": "https://github.com/NikaSir/ha-water-accounting",
   "integration_type": "service",
   "iot_class": "calculated",
@@ -10,4 +11,3 @@
   "requirements": [],
   "version": "0.1.0"
 }
-
