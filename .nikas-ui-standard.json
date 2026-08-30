@@ -1,7 +1,7 @@
 {
   "standard_version": "1.9",
   "panel_id": "water-accounting",
-  "ui_version": "0.1.0",
+  "ui_version": "0.1.1",
   "production_entrypoint": "custom_components/water_accounting/frontend/water-accounting-panel.js",
   "runtime_files": [
     "custom_components/water_accounting/frontend/water-accounting-panel.js"

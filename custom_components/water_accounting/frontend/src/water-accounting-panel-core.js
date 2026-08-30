@@ -2,7 +2,7 @@
 
 const WATER_APP = Object.freeze({
   title: "Учёт воды",
-  uiVersion: "0.1.0",
+  uiVersion: "0.1.1",
   preferredView: "overview",
   safeReturnRoute: "/dashboard-house-v11/home",
   tabs: [
@@ -418,19 +418,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       + '<div class="pressure-grid">'
       + this._pressureCardMarkup("drinking", "pressure_drinking", "Питьевая вода", "mdi:cup-water", "Норма 2,4–3,1 бар")
       + this._pressureCardMarkup("irrigation", "pressure_irrigation", "Вода для полива", "mdi:sprinkler-variant", "Норма 2,5–3,5 бар")
-      + '</div>'
-      + '<section class="pressure-thresholds" aria-label="Пороговые значения давления">'
-      + '<div class="thresholds-title"><ha-icon icon="mdi:format-list-checks"></ha-icon>'
-      + '<strong>Пороговые значения</strong></div>'
-      + '<div class="threshold-row drinking"><span>Питьевая</span>'
-      + '<p><b class="bad">0</b> нет давления · <b class="ok">2,4–3,1</b> норма · '
-      + '<b class="warn">остальное</b> отклонение</p></div>'
-      + '<div class="threshold-row irrigation"><span>Полив</span>'
-      + '<p><b class="bad">0</b> нет давления · <b class="bad">&lt;0,3 ≠ 0</b> аварийно · '
-      + '<b class="warn">0,3–&lt;2,5</b> недостаточно · <b class="ok">2,5–3,5</b> норма · '
-      + '<b class="warn">&gt;3,5–4,0</b> повышено · '
-      + '<b class="bad">&gt;4,0</b> аварийно</p></div>'
-      + '</section></article>'
+      + '</div></article>'
       + '<section class="section-block"><div class="section-heading">'
       + '<div><p class="eyebrow">Текущие показания</p><h2>Счётчики</h2></div>'
       + '<ha-icon icon="mdi:counter"></ha-icon></div>'
@@ -445,6 +433,21 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       + this._snapshotMarkup("24h", "За 24 часа")
       + this._snapshotMarkup("30d", "За 30 дней")
       + '</div></section>';
+  }
+
+  _thresholdsMarkup() {
+    return '<section class="pressure-thresholds meter-thresholds" aria-label="Пороговые значения давления">'
+      + '<div class="thresholds-title"><ha-icon icon="mdi:format-list-checks"></ha-icon>'
+      + '<strong>Пороговые значения давления</strong></div>'
+      + '<div class="threshold-row drinking"><span>Питьевая</span>'
+      + '<p><b class="bad">0</b> нет давления · <b class="ok">2,4–3,1</b> норма · '
+      + '<b class="warn">остальное</b> отклонение</p></div>'
+      + '<div class="threshold-row irrigation"><span>Полив</span>'
+      + '<p><b class="bad">0</b> нет давления · <b class="bad">&lt;0,3 ≠ 0</b> аварийно · '
+      + '<b class="warn">0,3–&lt;2,5</b> недостаточно · <b class="ok">2,5–3,5</b> норма · '
+      + '<b class="warn">&gt;3,5–4,0</b> повышено · '
+      + '<b class="bad">&gt;4,0</b> аварийно</p></div>'
+      + '</section>';
   }
 
   _pressureCardMarkup(kind, role, label, icon, range) {
@@ -499,7 +502,8 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       + '<section class="meters-list">'
       + this._meterCardMarkup("drinking", "Питьевая вода", "mdi:cup-water")
       + this._meterCardMarkup("irrigation", "Полив", "mdi:sprinkler-variant")
-      + '</section>';
+      + '</section>'
+      + this._thresholdsMarkup();
   }
 
   _meterCardMarkup(prefix, title, icon) {

@@ -50,7 +50,7 @@ class RepositoryContractTests(unittest.TestCase):
             contract["ui_version"],
             standard["ui_version"],
         }
-        self.assertEqual(versions, {"0.1.0"})
+        self.assertEqual(versions, {"0.1.1"})
         self.assertEqual(manifest["dependencies"], ["http", "panel_custom"])
         self.assertEqual(panel_manifest["panel_root"], "/dashboard-water")
         self.assertEqual(contract["entry_route"], "/dashboard-water")
@@ -84,6 +84,23 @@ class RepositoryContractTests(unittest.TestCase):
             data = json.loads((COMPONENT / name).read_text(encoding="utf-8"))
             self.assertIn("config", data)
             self.assertIn("user", data["config"]["step"])
+
+    def test_mobile_layout_and_threshold_placement(self) -> None:
+        core = (COMPONENT / "frontend" / "src" / "water-accounting-panel-core.js").read_text(
+            encoding="utf-8"
+        )
+        styles = (COMPONENT / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+        overview = core[
+            core.index("\n  _overviewMarkup() {") : core.index("\n  _thresholdsMarkup() {")
+        ]
+        meters = core[
+            core.index("\n  _metersMarkup() {") : core.index("\n  _meterCardMarkup(")
+        ]
+        self.assertNotIn("Пороговые значения давления", overview)
+        self.assertIn("this._thresholdsMarkup()", meters)
+        self.assertIn(".header-title:active", styles)
+        self.assertIn("grid-template-columns: repeat(var(--bucket-count), minmax(0, 1fr))", styles)
+        self.assertNotIn("calc(var(--bucket-count) * 21px)", styles)
 
 
 if __name__ == "__main__":

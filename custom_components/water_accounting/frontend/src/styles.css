@@ -111,32 +111,42 @@ button:active {
 
 .header-title {
   display: grid;
-  min-width: 0;
+  justify-self: center;
+  width: 100%;
+  min-width: min(290px, 100%);
+  max-width: 100%;
   min-height: 44px;
   place-content: center;
-  gap: 1px;
-  padding: 4px 12px;
+  gap: 2px;
+  padding: 5px 14px;
+  border: 1px solid color-mix(in srgb, var(--wa-blue) 24%, var(--wa-divider));
   border-radius: 16px;
-  background: transparent;
+  background: color-mix(in srgb, var(--wa-blue) 5%, var(--wa-card));
+  box-shadow: 0 5px 16px rgba(23, 45, 76, 0.06);
   text-align: center;
+}
+
+.header-title:active {
+  border-color: color-mix(in srgb, var(--wa-blue) 42%, var(--wa-divider));
+  background: color-mix(in srgb, var(--wa-blue) 13%, var(--wa-card));
+  box-shadow: 0 2px 7px rgba(23, 45, 76, 0.05);
 }
 
 .header-title strong {
   overflow: hidden;
-  font-size: 16px;
-  font-weight: 750;
-  line-height: 1.18;
+  font-size: clamp(16px, 4.6vw, 23px);
+  font-weight: 800;
+  line-height: 1.05;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .header-title span {
   color: var(--wa-muted);
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  line-height: 1.1;
-  text-transform: uppercase;
+  font-size: clamp(11px, 3.2vw, 14px);
+  font-weight: 560;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
 }
 
 .canvas-viewport {
@@ -168,8 +178,17 @@ button:active {
 .page {
   display: grid;
   width: min(100%, 1080px);
+  min-width: 0;
   margin: 0 auto;
   gap: 14px;
+}
+
+.page > *,
+.stats-summary-grid,
+.chart-card,
+.chart-heading,
+.chart-host {
+  min-width: 0;
 }
 
 .card,
@@ -389,6 +408,13 @@ h2 {
   border: 1px solid color-mix(in srgb, var(--wa-divider) 72%, transparent);
   border-radius: 17px;
   background: color-mix(in srgb, var(--wa-surface) 66%, transparent);
+}
+
+.page-meters .meter-thresholds {
+  margin-top: 0;
+  padding: 17px;
+  background: color-mix(in srgb, var(--wa-card) 96%, transparent);
+  box-shadow: 0 12px 34px rgba(19, 43, 69, 0.07);
 }
 
 .thresholds-title {
@@ -622,6 +648,7 @@ h2 {
 
 .chart-card {
   min-height: 322px;
+  overflow: hidden;
 }
 
 .chart-legend {
@@ -650,9 +677,10 @@ h2 {
 
 .chart-host {
   display: grid;
+  width: 100%;
   min-height: 238px;
   place-items: stretch;
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: hidden;
 }
 
@@ -672,10 +700,11 @@ h2 {
 
 .bar-chart {
   display: grid;
-  grid-template-columns: repeat(var(--bucket-count), minmax(18px, 1fr));
+  grid-template-columns: repeat(var(--bucket-count), minmax(0, 1fr));
   align-items: end;
-  gap: 3px;
-  min-width: max(100%, calc(var(--bucket-count) * 21px));
+  gap: clamp(1px, 0.7vw, 3px);
+  width: 100%;
+  min-width: 0;
   height: 238px;
   padding: 15px 2px 0;
   border-bottom: 1px solid var(--wa-divider);
@@ -1057,6 +1086,16 @@ h2 {
   }
 }
 
+@media (max-width: 600px) {
+  .stats-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stat-total.combined {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 390px) {
   .work-canvas {
     padding-right: 9px;
@@ -1077,14 +1116,6 @@ h2 {
 
   .threshold-row {
     grid-template-columns: 62px minmax(0, 1fr);
-  }
-
-  .stats-summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .stat-total.combined {
-    grid-column: 1 / -1;
   }
 
   .source-card {

@@ -7,7 +7,7 @@
   "safe_return_route": "/dashboard-house-v11/home",
   "visible_entry_owner": "house.resources.water",
   "read_only": true,
-  "ui_version": "0.1.0",
+  "ui_version": "0.1.1",
   "tabs": ["overview", "consumption", "meters", "diagnostics"],
   "statistics_periods": ["24h", "7d", "30d", "12m"],
   "pressure_policy": {
