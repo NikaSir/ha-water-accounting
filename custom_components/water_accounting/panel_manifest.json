@@ -1,0 +1,19 @@
+{
+  "id": "water-accounting",
+  "title": "Учёт воды",
+  "panel_root": "/dashboard-water",
+  "entry_route": "/dashboard-water",
+  "safe_return_route": "/dashboard-house-v11/home",
+  "owner": "water_accounting",
+  "preferred_view": "overview",
+  "ui_version": "0.1.0",
+  "template_version": "1.9",
+  "production_entrypoint": "frontend/water-accounting-panel.js",
+  "runtime_files": ["frontend/water-accounting-panel.js"],
+  "build_source_files": [
+    "frontend/src/zoom-controller.js",
+    "frontend/src/water-accounting-panel-core.js",
+    "frontend/src/styles.css"
+  ],
+  "read_only": true
+}

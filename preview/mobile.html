@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <title>Учёт воды · 430×932</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #dce4eb;
+      }
+
+      body {
+        display: grid;
+        justify-content: center;
+        padding: 16px;
+      }
+
+      iframe {
+        width: 430px;
+        height: 932px;
+        border: 0;
+        border-radius: 28px;
+        background: #f4f7fa;
+        box-shadow: 0 16px 50px rgba(26, 44, 62, .25);
+      }
+    </style>
+  </head>
+  <body>
+    <iframe title="Мобильная панель Учёт воды"></iframe>
+    <script>
+      const query = new URLSearchParams(location.search);
+      const view = query.get("view") || "overview";
+      const period = query.get("period") || "30d";
+      document.querySelector("iframe").src = `index.html?view=${encodeURIComponent(view)}&period=${encodeURIComponent(period)}`;
+    </script>
+  </body>
+</html>

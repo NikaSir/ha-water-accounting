@@ -1,0 +1,13 @@
+{
+  "domain": "water_accounting",
+  "name": "NikaS Water Accounting",
+  "codeowners": ["@NikaSir"],
+  "config_flow": true,
+  "documentation": "https://github.com/NikaSir/ha-water-accounting",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/NikaSir/ha-water-accounting/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
+

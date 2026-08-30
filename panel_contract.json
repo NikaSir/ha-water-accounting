@@ -1,0 +1,35 @@
+{
+  "contract_version": "1.1",
+  "id": "water-accounting",
+  "owner": "water_accounting",
+  "panel_root": "/dashboard-water",
+  "entry_route": "/dashboard-water",
+  "safe_return_route": "/dashboard-house-v11/home",
+  "visible_entry_owner": "house.resources.water",
+  "read_only": true,
+  "ui_version": "0.1.0",
+  "tabs": ["overview", "consumption", "meters", "diagnostics"],
+  "statistics_periods": ["24h", "7d", "30d", "12m"],
+  "pressure_policy": {
+    "drinking": {
+      "no_pressure": 0,
+      "normal_min": 2.4,
+      "normal_max": 3.1,
+      "outside_normal": "warning"
+    },
+    "irrigation": {
+      "critical_low_below": 0.3,
+      "normal_min": 2.5,
+      "normal_max": 3.5,
+      "warning_high_max": 4.0,
+      "critical_high_above": 4.0
+    },
+    "source": "approved legacy /dashboard-infrastructure/water policy"
+  },
+  "entities": {
+    "pressure_drinking": "sensor.nikas_h2000_pro_pitevaia_voda",
+    "pressure_irrigation": "sensor.nikas_h2000_pro_voda_na_poliv_2",
+    "drinking_total": "sensor.schetchik_vody_svd_20_0020989_pokazaniia",
+    "irrigation_total": "sensor.schetchik_vody_svd_20_0020988_pokazaniia"
+  }
+}

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <title>Учёт воды · preview</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --primary-background-color: #f4f7fa;
+        --secondary-background-color: #edf2f7;
+        --card-background-color: #fff;
+        --ha-card-background: #fff;
+        --primary-text-color: #20242a;
+        --secondary-text-color: #6e7782;
+        --divider-color: rgba(79, 96, 113, .18);
+        --success-color: #28a968;
+        --warning-color: #e59112;
+        --error-color: #dd4148;
+      }
+
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--primary-background-color);
+      }
+    </style>
+    <script>
+      class PreviewHaIcon extends HTMLElement {
+        connectedCallback() {
+          const icons = {
+            "mdi:menu": "☰",
+            "mdi:refresh": "↻",
+            "mdi:home-flood": "⌂",
+            "mdi:cup-water": "●",
+            "mdi:sprinkler-variant": "✦",
+            "mdi:format-list-checks": "≡",
+            "mdi:counter": "#",
+            "mdi:chart-timeline-variant": "▥",
+            "mdi:water-outline": "◉",
+            "mdi:chart-bar": "▥",
+            "mdi:gauge": "◴",
+            "mdi:stethoscope": "+",
+            "mdi:thermometer": "°",
+            "mdi:battery": "▰",
+            "mdi:signal": "⌁",
+            "mdi:clock-outline": "◷",
+          };
+          const symbol = icons[this.getAttribute("icon")] || "·";
+          this.attachShadow({ mode: "open" }).innerHTML = `<style>:host{display:inline-grid;width:var(--mdc-icon-size,24px);height:var(--mdc-icon-size,24px);place-items:center;font:800 calc(var(--mdc-icon-size,24px)*.8)/1 system-ui}</style>${symbol}`;
+        }
+      }
+      customElements.define("ha-icon", PreviewHaIcon);
+      const query = new URLSearchParams(location.search);
+      localStorage.setItem("nikas.water-accounting.view.v1", query.get("view") || "overview");
+      localStorage.setItem("nikas.water-accounting.period.v1", query.get("period") || "24h");
+    </script>
+    <script src="../custom_components/water_accounting/frontend/water-accounting-panel.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const entities = {
+        pressure_drinking: "sensor.nikas_h2000_pro_pitevaia_voda",
+        pressure_irrigation: "sensor.nikas_h2000_pro_voda_na_poliv_2",
+        zont_online: "binary_sensor.nikas_h2000_pro_online",
+        drinking_total: "sensor.schetchik_vody_svd_20_0020989_pokazaniia",
+        drinking_temperature: "sensor.schetchik_vody_svd_20_0020989_temperatura",
+        drinking_battery: "sensor.schetchik_vody_svd_20_0020989_batareia",
+        drinking_signal: "sensor.schetchik_vody_svd_20_0020989_signal",
+        drinking_updated: "sensor.schetchik_vody_svd_20_0020989_obnovleno",
+        irrigation_total: "sensor.schetchik_vody_svd_20_0020988_pokazaniia",
+        irrigation_temperature: "sensor.schetchik_vody_svd_20_0020988_temperatura",
+        irrigation_battery: "sensor.schetchik_vody_svd_20_0020988_batareia",
+        irrigation_signal: "sensor.schetchik_vody_svd_20_0020988_signal",
+        irrigation_updated: "sensor.schetchik_vody_svd_20_0020988_obnovleno",
+      };
+      const stamp = "2026-08-30T15:42:00.000Z";
+      const state = (value, unit, extra = {}) => ({
+        state: String(value),
+        attributes: { unit_of_measurement: unit, ...extra },
+        last_updated: stamp,
+      });
+      const states = {
+        [entities.pressure_drinking]: state(2.74, "bar", { device_class: "pressure" }),
+        [entities.pressure_irrigation]: state(2.82, "bar", { device_class: "pressure" }),
+        [entities.zont_online]: state("on", ""),
+        [entities.drinking_total]: state(183.742, "m³", { device_class: "water", state_class: "total_increasing" }),
+        [entities.drinking_temperature]: state(17.8, "°C"),
+        [entities.drinking_battery]: state(84, "%"),
+        [entities.drinking_signal]: state(-61, "dBm"),
+        [entities.drinking_updated]: state(stamp, "", { device_class: "timestamp" }),
+        [entities.irrigation_total]: state(76.421, "m³", { device_class: "water", state_class: "total_increasing" }),
+        [entities.irrigation_temperature]: state(13.2, "°C"),
+        [entities.irrigation_battery]: state(73, "%"),
+        [entities.irrigation_signal]: state(-68, "dBm"),
+        [entities.irrigation_updated]: state(stamp, "", { device_class: "timestamp" }),
+      };
+
+      function mockStatistics(message) {
+        const count = message.period === "hour" ? 24 : message.period === "month" ? 12 : 30;
+        const step = message.period === "hour" ? 3_600_000 : message.period === "month" ? 2_592_000_000 : 86_400_000;
+        const start = Date.parse(message.start_time);
+        const result = {};
+        message.statistic_ids.forEach((entityId, entityIndex) => {
+          let sum = entityIndex ? 76 : 183;
+          result[entityId] = Array.from({ length: count }, (_unused, index) => {
+            const base = entityIndex ? (index % 4 === 0 ? 0.18 : 0.035) : 0.022 + (index % 5) * 0.006;
+            const change = message.period === "month" ? base * 44 : message.period === "day" ? base * 8 : base;
+            sum += change;
+            return { start: start + index * step, change, sum, state: sum };
+          });
+        });
+        return result;
+      }
+
+      const panel = document.createElement("nikas-water-accounting-panel");
+      panel.panel = {
+        config: {
+          title: "Учёт воды",
+          ui_version: "0.1.0",
+          parent_route: "/dashboard-house-v11/home",
+          entities,
+        },
+      };
+      panel.hass = {
+        locale: { language: "ru" },
+        states,
+        callWS: async (message) => mockStatistics(message),
+        callService: async () => undefined,
+      };
+      document.getElementById("root").appendChild(panel);
+    </script>
+  </body>
+</html>

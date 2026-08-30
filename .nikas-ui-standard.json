@@ -1,0 +1,18 @@
+{
+  "standard_version": "1.9",
+  "panel_id": "water-accounting",
+  "ui_version": "0.1.0",
+  "production_entrypoint": "custom_components/water_accounting/frontend/water-accounting-panel.js",
+  "runtime_files": [
+    "custom_components/water_accounting/frontend/water-accounting-panel.js"
+  ],
+  "build_source_files": [
+    "custom_components/water_accounting/frontend/src/zoom-controller.js",
+    "custom_components/water_accounting/frontend/src/water-accounting-panel-core.js",
+    "custom_components/water_accounting/frontend/src/styles.css"
+  ],
+  "data_source": "Existing Home Assistant ZONT and Elehant entities plus authenticated Recorder statistics WebSocket API",
+  "command_policy": "read_only",
+  "connection_indicator": false,
+  "safe_return_route": "/dashboard-house-v11/home"
+}
