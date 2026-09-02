@@ -50,7 +50,7 @@ class RepositoryContractTests(unittest.TestCase):
             contract["ui_version"],
             standard["ui_version"],
         }
-        self.assertEqual(versions, {"0.1.1"})
+        self.assertEqual(versions, {"0.1.2"})
         self.assertEqual(manifest["dependencies"], ["http", "panel_custom"])
         self.assertEqual(panel_manifest["panel_root"], "/dashboard-water")
         self.assertEqual(contract["entry_route"], "/dashboard-water")
