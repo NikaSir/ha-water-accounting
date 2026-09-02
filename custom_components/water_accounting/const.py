@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 DOMAIN = "water_accounting"
-INTEGRATION_VERSION = "0.1.1"
-UI_VERSION = "0.1.1"
+INTEGRATION_VERSION = "0.1.2"
+UI_VERSION = "0.1.2"
 UI_STANDARD_VERSION = "1.9"
 
 ENTITY_MAP: dict[str, str] = {

@@ -1,5 +1,5 @@
 {
-  "title": "Учёт воды",
+  "title": "NikaS Water Accounting",
   "config": {
     "step": {
       "user": {
@@ -12,4 +12,3 @@
     }
   }
 }
-

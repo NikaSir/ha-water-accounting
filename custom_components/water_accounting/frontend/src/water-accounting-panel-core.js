@@ -2,7 +2,7 @@
 
 const WATER_APP = Object.freeze({
   title: "Учёт воды",
-  uiVersion: "0.1.1",
+  uiVersion: "0.1.2",
   preferredView: "overview",
   safeReturnRoute: "/dashboard-house-v11/home",
   tabs: [
