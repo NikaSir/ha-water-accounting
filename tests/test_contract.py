@@ -50,11 +50,11 @@ class RepositoryContractTests(unittest.TestCase):
             contract["ui_version"],
             standard["ui_version"],
         }
-        self.assertEqual(versions, {"0.1.2"})
+        self.assertEqual(versions, {"0.1.3"})
         self.assertEqual(manifest["dependencies"], ["http", "panel_custom"])
         self.assertEqual(panel_manifest["panel_root"], "/dashboard-water")
         self.assertEqual(contract["entry_route"], "/dashboard-water")
-        self.assertEqual(contract["safe_return_route"], "/dashboard-house-v11/home")
+        self.assertEqual(contract["safe_return_route"], "/dashboard-house-v13/home")
 
     def test_entity_contract_is_present_in_runtime(self) -> None:
         constants = runpy.run_path(str(COMPONENT / "const.py"))

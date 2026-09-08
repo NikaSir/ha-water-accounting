@@ -3,7 +3,7 @@
 ## Маршруты и оболочка
 
 - публичный маршрут: `/dashboard-water`;
-- безопасный возврат: `/dashboard-house-v11/home`;
+- безопасный возврат: `/dashboard-house-v13/home`;
 - web component: `nikas-water-accounting-panel`;
 - четыре постоянные нижние вкладки: `overview`, `consumption`, `meters`, `diagnostics`;
 - масштабируется только `.work-canvas` внутри единственной `.canvas-viewport`;

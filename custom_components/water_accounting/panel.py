@@ -19,7 +19,7 @@ from .const import (
 PANEL_ID = "water-accounting"
 PANEL_TITLE = "Учёт воды"
 PANEL_URL_PATH = "dashboard-water"
-PANEL_PARENT_ROUTE = "/dashboard-house-v11/home"
+PANEL_PARENT_ROUTE = "/dashboard-house-v13/home"
 PANEL_ICON = "mdi:water"
 PANEL_WEB_COMPONENT = "nikas-water-accounting-panel"
 PANEL_STATIC_URL = "/water_accounting_panel"
