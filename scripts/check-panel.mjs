@@ -161,6 +161,14 @@ assert.equal(
   "/dashboard-actions/home",
   "invalid return_to must not suppress a valid from route",
 );
+context.window.location.href = "https://ha.local/dashboard-water?from=%2Fdashboard-house-v13%2Fdetails";
+session.clear();
+assert.equal(
+  context.testResolveReturnRoute({ _panel: null }),
+  "/dashboard-house-v13/home",
+  "current House source route must be canonicalized",
+);
+
 context.window.location.href = "https://ha.local/dashboard-water";
 session.clear();
 session.set("nikas.specialized.source_route.v1", "/dashboard-infrastructure/water");

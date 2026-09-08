@@ -2,9 +2,9 @@
 
 const WATER_APP = Object.freeze({
   title: "Учёт воды",
-  uiVersion: "0.1.2",
+  uiVersion: "0.1.3",
   preferredView: "overview",
-  safeReturnRoute: "/dashboard-house-v11/home",
+  safeReturnRoute: "/dashboard-house-v13/home",
   tabs: [
     ["overview", "mdi:water-outline", "Обзор"],
     ["consumption", "mdi:chart-bar", "Расход"],
@@ -58,8 +58,8 @@ function escapeHtml(value) {
 }
 
 function canonicalBaseRoute(pathname) {
-  if (pathname === "/dashboard-house-v11" || pathname.startsWith("/dashboard-house-v11/")) {
-    return "/dashboard-house-v11/home";
+  if (pathname === "/dashboard-house-v13" || pathname.startsWith("/dashboard-house-v13/")) {
+    return "/dashboard-house-v13/home";
   }
   if (pathname === "/dashboard-actions" || pathname.startsWith("/dashboard-actions/")) {
     return "/dashboard-actions/home";
