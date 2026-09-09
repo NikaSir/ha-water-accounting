@@ -550,7 +550,7 @@ h2 {
   gap: 2px;
 }
 
-.snapshot-card > div:last-child {
+.snapshot-card > div:last-of-type {
   text-align: right;
 }
 
@@ -564,9 +564,18 @@ h2 {
 }
 
 .snapshot-card[data-state="error"] > strong,
+.snapshot-card[data-state="partial"] > strong,
 .snapshot-card[data-state="empty"] > strong {
   color: var(--wa-muted);
   font-size: 13px;
+}
+
+.statistics-coverage {
+  grid-column: 1 / -1;
+  color: var(--wa-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
 }
 
 .consumption-head,

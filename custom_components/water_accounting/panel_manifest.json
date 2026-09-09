@@ -6,7 +6,7 @@
   "safe_return_route": "/dashboard-house-v13/home",
   "owner": "water_accounting",
   "preferred_view": "overview",
-  "ui_version": "0.1.3",
+  "ui_version": "0.1.4",
   "template_version": "1.9",
   "production_entrypoint": "frontend/water-accounting-panel.js",
   "runtime_files": ["frontend/water-accounting-panel.js"],

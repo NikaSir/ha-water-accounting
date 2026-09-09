@@ -33,6 +33,7 @@ jobs:
           node --check custom_components/water_accounting/frontend/src/water-accounting-panel-core.js
           node --check custom_components/water_accounting/frontend/water-accounting-panel.js
           node scripts/check-panel.mjs
+          node scripts/check-statistics.mjs
 
       - name: Validate integration contract
         run: python -m unittest discover -s tests -v

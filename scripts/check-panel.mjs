@@ -141,14 +141,16 @@ const drinkingTotal = "sensor.schetchik_vody_svd_20_0020989_pokazaniia";
 const irrigationTotal = "sensor.schetchik_vody_svd_20_0020988_pokazaniia";
 const normalized = panel._normalizeStatistics({
   [drinkingTotal]: [
-    { start: 1_000, change: 0.12, sum: 12.12 },
-    { start: 2_000, change: 0.08, sum: 12.20 },
+    { start: 0, sum: 12 },
+    { start: 3_600_000, change: 0.12, sum: 12.12 },
+    { start: 7_200_000, change: 0.08, sum: 12.20 },
   ],
   [irrigationTotal]: [
-    { start: 1_000, change: 0.50, sum: 4.50 },
-    { start: 2_000, change: 0, sum: 4.50 },
+    { start: 0, sum: 4 },
+    { start: 3_600_000, change: 0.50, sum: 4.50 },
+    { start: 7_200_000, change: 0, sum: 4.50 },
   ],
-}, { key: "24h", period: "hour" });
+}, { key: "24h", period: "hour", start: new Date(3_600_000), end: new Date(10_800_000) });
 assert.equal(normalized.drinking, 0.20);
 assert.equal(normalized.irrigation, 0.50);
 assert.equal(normalized.total, 0.70);
