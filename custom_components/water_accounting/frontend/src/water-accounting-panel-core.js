@@ -2,7 +2,7 @@
 
 const WATER_APP = Object.freeze({
   title: "Учёт воды",
-  uiVersion: "0.1.3",
+  uiVersion: "0.1.4",
   preferredView: "overview",
   safeReturnRoute: "/dashboard-house-v13/home",
   tabs: [
@@ -46,6 +46,7 @@ const VIEW_STORAGE_KEY = "nikas.water-accounting.view.v1";
 const PERIOD_STORAGE_KEY = "nikas.water-accounting.period.v1";
 const VALID_VIEWS = new Set(WATER_APP.tabs.map(function (tab) { return tab[0]; }));
 const VALID_PERIODS = new Set(["24h", "7d", "30d", "12m"]);
+const STATISTICS_HOUR_MS = 60 * 60 * 1000;
 const BAD_STATES = new Set(["", "unknown", "unavailable", "none", "null"]);
 
 function escapeHtml(value) {
@@ -471,6 +472,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       + '<span>' + label + '</span><strong data-snapshot-total>Загрузка…</strong>'
       + '<div><small>Питьевая</small><b data-snapshot-drinking>—</b></div>'
       + '<div><small>Полив</small><b data-snapshot-irrigation>—</b></div>'
+      + '<small class="statistics-coverage" data-snapshot-coverage>Только завершённые часы</small>'
       + '</article>';
   }
 
@@ -489,6 +491,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       + '<article class="stat-total irrigation"><span>Полив</span><strong data-stat-irrigation>—</strong></article>'
       + '<article class="stat-total combined"><span>Всего</span><strong data-stat-total>—</strong></article>'
       + '</section>'
+      + '<p class="statistics-coverage" data-stat-coverage>Только завершённые часы</p>'
       + '<article class="card chart-card">'
       + '<div class="chart-heading"><div><p class="eyebrow">Динамика</p><h2>Расход по интервалам</h2></div>'
       + '<div class="chart-legend"><span class="drinking">Питьевая</span><span class="irrigation">Полив</span></div></div>'
@@ -803,7 +806,8 @@ class NikaSWaterAccountingPanel extends HTMLElement {
   }
 
   _periodDefinition(key) {
-    const end = new Date();
+    // Do not treat the still-running hour as zero, or shorten a delayed window.
+    const end = new Date(Math.floor(Date.now() / STATISTICS_HOUR_MS) * STATISTICS_HOUR_MS);
     const start = new Date(end);
     let period = "hour";
     let label = "24 часа";
@@ -822,8 +826,9 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       period = "month";
       label = "12 месяцев";
     } else {
-      start.setHours(start.getHours() - 24);
+      start.setTime(end.getTime() - 24 * STATISTICS_HOUR_MS);
     }
+    start.setTime(Math.ceil(start.getTime() / STATISTICS_HOUR_MS) * STATISTICS_HOUR_MS);
     return { key: key, start: start, end: end, period: period, label: label };
   }
 
@@ -880,11 +885,13 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       }
       return this._withTimeout(this._hass.callWS({
         type: "recorder/statistics_during_period",
-        start_time: definition.start.toISOString(),
+        // Recorder change may use an older sum (or zero): validate its baseline.
+        start_time: new Date(definition.start.getTime() - STATISTICS_HOUR_MS).toISOString(),
         end_time: definition.end.toISOString(),
         statistic_ids: statisticIds,
-        period: definition.period,
-        types: ["change", "state", "sum"],
+        // Day/month reductions hide gaps. Check hourly coverage before grouping.
+        period: "hour",
+        types: ["change", "sum"],
       }), 60_000);
     }).then((raw) => {
       load.status = "complete";
@@ -904,53 +911,92 @@ class NikaSWaterAccountingPanel extends HTMLElement {
 
   _seriesRows(raw, entityId) {
     const rows = raw && entityId && Array.isArray(raw[entityId]) ? raw[entityId] : [];
-    let previous = null;
     return rows.map((row) => {
-      let value = numeric(row && row.change);
-      const cumulative = numeric(row && (row.sum != null ? row.sum : row.state));
-      if (value == null && cumulative != null && previous != null) {
-        const delta = cumulative - previous;
-        value = delta >= 0 ? delta : null;
-      }
-      if (cumulative != null) previous = cumulative;
+      const value = numeric(row && row.change);
       const start = numeric(row && row.start);
       return {
         start: start,
         value: value != null && value >= 0 ? value : null,
+        sum: numeric(row && row.sum),
       };
     }).filter((row) => row.start != null);
   }
 
   _normalizeStatistics(raw, definition) {
     const entities = this._config().entities;
-    const drinking = this._seriesRows(raw, entities.drinking_total);
-    const irrigation = this._seriesRows(raw, entities.irrigation_total);
+    const start = definition.start.getTime();
+    const end = definition.end.getTime();
+    const rowsByKind = {};
+    ["drinking", "irrigation"].forEach((kind) => {
+      const rows = new Map();
+      this._seriesRows(raw, entities[kind + "_total"]).forEach((row) => {
+        if (row.start < start - STATISTICS_HOUR_MS || row.start >= end
+          || row.start % STATISTICS_HOUR_MS !== 0) return;
+        // A duplicate makes both the value and its use as a baseline ambiguous.
+        rows.set(row.start, rows.has(row.start) ? { value: null, sum: null } : row);
+      });
+      rowsByKind[kind] = rows;
+    });
+    const coverage = { expected: 0, drinking: 0, irrigation: 0 };
+    const known = { drinking: null, irrigation: null, total: null };
     const buckets = new Map();
-    function add(series, key) {
-      series.forEach((row) => {
-        const id = String(row.start);
-        if (!buckets.has(id)) buckets.set(id, { start: row.start, drinking: null, irrigation: null });
-        buckets.get(id)[key] = row.value;
+    // Generate the requested grid, not the union of returned rows: even a gap
+    // in both series must be visible. Bounds are whole UTC Recorder hours.
+    for (let timestamp = start; timestamp < end; timestamp += STATISTICS_HOUR_MS) {
+      const date = new Date(timestamp);
+      if (definition.period === "month") date.setDate(1);
+      if (definition.period === "day" || definition.period === "month") date.setHours(0, 0, 0, 0);
+      const id = date.getTime();
+      if (!buckets.has(id)) buckets.set(id, {
+        start: id, drinking: null, irrigation: null,
+        coverage: { expected: 0, drinking: 0, irrigation: 0 },
+      });
+      const bucket = buckets.get(id);
+      coverage.expected += 1;
+      bucket.coverage.expected += 1;
+      ["drinking", "irrigation"].forEach((kind) => {
+        const rows = rowsByKind[kind];
+        const row = rows.get(timestamp);
+        const previous = rows.get(timestamp - STATISTICS_HOUR_MS);
+        // No cumulative fallback: change can bridge a gap unless the previous
+        // hour exists with a numeric sum. Its own change need not be known.
+        if (!row || !previous || row.value == null || row.sum == null || previous.sum == null) return;
+        coverage[kind] += 1;
+        bucket.coverage[kind] += 1;
+        known[kind] = (known[kind] ?? 0) + row.value;
+        bucket[kind] = (bucket[kind] ?? 0) + row.value;
       });
     }
-    add(drinking, "drinking");
-    add(irrigation, "irrigation");
-    const values = Array.from(buckets.values()).sort((left, right) => left.start - right.start);
-    function sum(key) {
-      const numbers = values.map((item) => item[key]).filter((value) => Number.isFinite(value));
-      return numbers.length ? numbers.reduce((total, value) => total + value, 0) : null;
-    }
-    const drinkingTotal = sum("drinking");
-    const irrigationTotal = sum("irrigation");
+    const values = Array.from(buckets.values());
+    values.forEach((bucket) => {
+      ["drinking", "irrigation"].forEach((kind) => {
+        if (bucket.coverage[kind] !== bucket.coverage.expected) bucket[kind] = null;
+      });
+    });
+    const complete = (kind) => coverage.expected > 0 && coverage[kind] === coverage.expected;
+    const drinkingTotal = complete("drinking") ? known.drinking : null;
+    const irrigationTotal = complete("irrigation") ? known.irrigation : null;
+    const total = drinkingTotal != null && irrigationTotal != null ? drinkingTotal + irrigationTotal : null;
+    if (known.drinking != null || known.irrigation != null) known.total = (known.drinking ?? 0) + (known.irrigation ?? 0);
     return {
       definition: definition,
       buckets: values,
       drinking: drinkingTotal,
       irrigation: irrigationTotal,
-      total: drinkingTotal == null && irrigationTotal == null
-        ? null
-        : (drinkingTotal || 0) + (irrigationTotal || 0),
+      total: total,
+      known: known,
+      coverage: coverage,
+      status: total != null ? "ready" : known.total != null ? "partial" : "empty",
     };
+  }
+
+  _coverageText(result) {
+    const coverage = result.coverage;
+    const label = result.status === "ready" ? "Часовая статистика полная"
+      : result.status === "partial" ? "Неполные данные" : "Нет подтверждённых данных";
+    return label + ": питьевая " + coverage.drinking + "/" + coverage.expected
+      + ", полив " + coverage.irrigation + "/" + coverage.expected
+      + " ч. Только завершённые часы; календарные группы — по времени браузера.";
   }
 
   _formatVolume(value) {
@@ -978,14 +1024,17 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       total = "Recorder недоступен";
       state = "error";
     } else if (load && load.status === "complete") {
-      state = load.result && load.result.total != null ? "ready" : "empty";
-      total = state === "ready" ? this._formatVolume(load.result.total) : "Нет записей";
+      state = load.result.status;
+      total = state === "ready" ? this._formatVolume(load.result.total)
+        : state === "partial" ? "Неполные данные" : "Нет записей";
       drinking = this._formatVolume(load.result.drinking);
       irrigation = this._formatVolume(load.result.irrigation);
     }
     this._setText("[data-snapshot-total]", total, card);
     this._setText("[data-snapshot-drinking]", drinking, card);
     this._setText("[data-snapshot-irrigation]", irrigation, card);
+    this._setText("[data-snapshot-coverage]", load && load.status === "complete"
+      ? this._coverageText(load.result) : "Только завершённые часы", card);
     card.dataset.state = state;
   }
 
@@ -998,6 +1047,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       this._setText("[data-stat-drinking]", "—", root);
       this._setText("[data-stat-irrigation]", "—", root);
       this._setText("[data-stat-total]", "—", root);
+      this._setText("[data-stat-coverage]", "Загрузка часовой статистики…", root);
       if (host && host.dataset.renderState !== "loading") {
         host.dataset.renderState = "loading";
         host.innerHTML = '<div class="chart-state">Загрузка статистики…</div>';
@@ -1008,6 +1058,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       this._setText("[data-stat-drinking]", "—", root);
       this._setText("[data-stat-irrigation]", "—", root);
       this._setText("[data-stat-total]", "—", root);
+      this._setText("[data-stat-coverage]", "Recorder недоступен", root);
       if (host && host.dataset.renderState !== "error") {
         host.dataset.renderState = "error";
         host.innerHTML = '<div class="chart-state error">Recorder недоступен</div>';
@@ -1018,8 +1069,8 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     this._setText("[data-stat-drinking]", this._formatVolume(result.drinking), root);
     this._setText("[data-stat-irrigation]", this._formatVolume(result.irrigation), root);
     this._setText("[data-stat-total]", this._formatVolume(result.total), root);
-    const signature = this._period + ":" + result.buckets.length + ":"
-      + String(result.total) + ":" + String(result.drinking) + ":" + String(result.irrigation);
+    this._setText("[data-stat-coverage]", this._coverageText(result), root);
+    const signature = this._period + ":" + JSON.stringify(result.buckets);
     if (host && host.dataset.renderState !== signature) {
       host.dataset.renderState = signature;
       host.innerHTML = this._chartMarkup(result);
@@ -1033,7 +1084,9 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       if (Number.isFinite(bucket.drinking)) values.push(bucket.drinking);
       if (Number.isFinite(bucket.irrigation)) values.push(bucket.irrigation);
     });
-    if (!values.length) return '<div class="chart-state">Нет записей за выбранный период</div>';
+    if (!values.length) return '<div class="chart-state">'
+      + (result.status === "partial" ? "Неполные данные: нет полностью покрытых интервалов" : "Нет подтверждённых записей за выбранный период")
+      + '</div>';
     const max = Math.max.apply(null, values.concat([0.000001]));
     const definition = result.definition;
     const labelEvery = Math.max(1, Math.ceil(buckets.length / 6));
@@ -1066,7 +1119,8 @@ class NikaSWaterAccountingPanel extends HTMLElement {
 
   _bucketTitle(bucket, period) {
     return this._bucketLabel(bucket.start, period) + ": питьевая "
-      + this._formatVolume(bucket.drinking) + ", полив " + this._formatVolume(bucket.irrigation);
+      + (bucket.drinking == null ? "— (нет полных данных)" : this._formatVolume(bucket.drinking))
+      + ", полив " + (bucket.irrigation == null ? "— (нет полных данных)" : this._formatVolume(bucket.irrigation));
   }
 
   async _refresh() {

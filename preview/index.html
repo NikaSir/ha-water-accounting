@@ -102,15 +102,15 @@
       };
 
       function mockStatistics(message) {
-        const count = message.period === "hour" ? 24 : message.period === "month" ? 12 : 30;
-        const step = message.period === "hour" ? 3_600_000 : message.period === "month" ? 2_592_000_000 : 86_400_000;
+        const step = 3_600_000;
         const start = Date.parse(message.start_time);
+        const count = Math.ceil((Date.parse(message.end_time) - start) / step);
         const result = {};
         message.statistic_ids.forEach((entityId, entityIndex) => {
           let sum = entityIndex ? 76 : 183;
           result[entityId] = Array.from({ length: count }, (_unused, index) => {
             const base = entityIndex ? (index % 4 === 0 ? 0.18 : 0.035) : 0.022 + (index % 5) * 0.006;
-            const change = message.period === "month" ? base * 44 : message.period === "day" ? base * 8 : base;
+            const change = base;
             sum += change;
             return { start: start + index * step, change, sum, state: sum };
           });
@@ -122,7 +122,7 @@
       panel.panel = {
         config: {
           title: "Учёт воды",
-          ui_version: "0.1.3",
+          ui_version: "0.1.4",
           parent_route: "/dashboard-house-v13/home",
           entities,
         },
