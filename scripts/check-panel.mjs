@@ -3,7 +3,8 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 const frontend = "custom_components/water_accounting/frontend";
-const [core, zoom, css, bundle] = await Promise.all([
+const [shell, core, zoom, css, bundle] = await Promise.all([
+  readFile("templates/shell_v2/nikas-specialized-shell.js", "utf8"),
   readFile(`${frontend}/src/water-accounting-panel-core.js`, "utf8"),
   readFile(`${frontend}/src/zoom-controller.js`, "utf8"),
   readFile(`${frontend}/src/styles.css`, "utf8"),
@@ -33,10 +34,14 @@ assert.ok(!core.includes("history.back("), "history.back() is forbidden");
 assert.ok(!bundle.includes("__WATER_ACCOUNTING_CSS__"), "bundle contains an unresolved CSS marker");
 assert.ok(!/^\s*(?:import|export)\b/m.test(bundle), "production bundle has a runtime import/export");
 assert.ok(!/\bimport\s*\(/.test(bundle), "production bundle has a dynamic runtime import");
-assert.match(css, /:host\s*\{[\s\S]*position: fixed;[\s\S]*inset: 0;/, "host must own the fixed panel shell");
-assert.match(css, /grid-template-rows: auto minmax\(0, 1fr\) auto/, "shell must have three persistent rows");
+assert.ok(!/^:host\s*\{[^}]*position:\s*fixed/m.test(css), "host must remain bound to ha-panel");
+assert.match(shell, /grid-template-rows:calc\(60px \+ env\(safe-area-inset-top,0px\)\) minmax\(0,1fr\)/, "shell must have canonical persistent rows");
+assert.match(shell, /calc\(64px \+ env\(safe-area-inset-bottom,0px\)\)/, "bottom bar must be 64px plus safe area");
+assert.match(shell, /max-inline-size:1280px/, "canonical work-content frame is missing");
+assert.match(shell, /--mdc-icon-size:26px/, "bottom navigation icons must be 26px");
+assert.match(core, /createNikasShellScrollBoundaryGuard/, "capture-phase scroll boundary guard is not mounted");
 assert.match(css, /\.canvas-viewport\.zoomed\s*\{[\s\S]*overflow: hidden;/, "zoomed viewport must not leak scroll");
-assert.ok(!css.includes("100dvh"), "100dvh must not create a competing outer viewport");
+assert.ok(!bundle.includes("100dvh"), "100dvh must not create a competing outer viewport");
 
 for (const match of css.matchAll(/font-size:\s*(\d+)px/g)) {
   const size = Number(match[1]);
@@ -68,6 +73,9 @@ const context = {
     location: {
       href: "https://ha.local/dashboard-water",
       origin: "https://ha.local",
+      pathname: "/dashboard-water",
+      search: "",
+      hash: "",
     },
     history: { pushState: () => {} },
     dispatchEvent: () => {},
@@ -77,6 +85,8 @@ const context = {
   },
   document: { referrer: "" },
   URL,
+  URLSearchParams,
+  Event,
   Intl,
   Promise,
   Date,
@@ -93,9 +103,11 @@ const context = {
   console,
 };
 context.window.window = context.window;
+context.window.localStorage = context.localStorage;
+context.window.sessionStorage = context.sessionStorage;
 vm.createContext(context);
 vm.runInContext(
-  `${core}\nthis.TestPanel = NikaSWaterAccountingPanel; this.TestPool = WaterTaskPool; this.testResolveReturnRoute = resolveReturnRoute;`,
+  `${shell}\n${core}\nthis.TestPanel = NikaSWaterAccountingPanel; this.TestPool = WaterTaskPool; this.testResolveReturnRoute = resolveReturnRoute;`,
   context,
 );
 
@@ -156,14 +168,25 @@ assert.equal(normalized.irrigation, 0.50);
 assert.equal(normalized.total, 0.70);
 assert.equal(normalized.buckets.length, 2);
 
-context.window.location.href = "https://ha.local/dashboard-water?return_to=https%3A%2F%2Fevil.example%2Fdashboard-house&from=%2Fdashboard-actions%2Fwhatever";
+function setLocation(href) {
+  const parsed = new URL(href);
+  context.window.location = {
+    href: parsed.href,
+    origin: parsed.origin,
+    pathname: parsed.pathname,
+    search: parsed.search,
+    hash: parsed.hash,
+  };
+}
+
+setLocation("https://ha.local/dashboard-water?return_to=https%3A%2F%2Fevil.example%2Fdashboard-house&from=%2Fdashboard-actions%2Fwhatever");
 session.clear();
 assert.equal(
   context.testResolveReturnRoute({ _panel: null }),
   "/dashboard-actions/home",
   "invalid return_to must not suppress a valid from route",
 );
-context.window.location.href = "https://ha.local/dashboard-water?from=%2Fdashboard-house-v13%2Fdetails";
+setLocation("https://ha.local/dashboard-water?from=%2Fdashboard-house-v13%2Fdetails");
 session.clear();
 assert.equal(
   context.testResolveReturnRoute({ _panel: null }),
@@ -171,7 +194,7 @@ assert.equal(
   "current House source route must be canonicalized",
 );
 
-context.window.location.href = "https://ha.local/dashboard-water";
+setLocation("https://ha.local/dashboard-water");
 session.clear();
 session.set("nikas.specialized.source_route.v1", "/dashboard-infrastructure/water");
 session.set("nikas.specialized.source_route_at.v1", String(Date.now()));
@@ -179,6 +202,14 @@ assert.equal(
   context.testResolveReturnRoute({ _panel: null }),
   "/dashboard-infrastructure/overview",
   "fresh source hand-off must be canonicalized",
+);
+
+setLocation("https://ha.local/dashboard-water?from=%2Fdashboard-rooms-v11%2Fdetails");
+session.clear();
+assert.equal(
+  context.testResolveReturnRoute({ _panel: null }),
+  "/dashboard-rooms-v11/rooms",
+  "Rooms source route must be canonicalized",
 );
 
 const pool = new context.TestPool(2);

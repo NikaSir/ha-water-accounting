@@ -6,11 +6,12 @@
   "safe_return_route": "/dashboard-house-v13/home",
   "owner": "water_accounting",
   "preferred_view": "overview",
-  "ui_version": "0.1.4",
-  "template_version": "1.9",
+  "ui_version": "0.1.5",
+  "template_version": "2.2",
   "production_entrypoint": "frontend/water-accounting-panel.js",
   "runtime_files": ["frontend/water-accounting-panel.js"],
   "build_source_files": [
+    "../../templates/shell_v2/nikas-specialized-shell.js",
     "frontend/src/zoom-controller.js",
     "frontend/src/water-accounting-panel-core.js",
     "frontend/src/styles.css"
