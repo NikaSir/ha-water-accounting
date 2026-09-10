@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.5 — 2026-09-09
+
+- A19: профиль, документы и production переведены на NikaS UI Standard 2.2,
+  Navigation Contract 1.2 и канонический host-bound Shell v2.1.
+- Header и Bottom Tab Bar приведены к геометрии 60/64 px; нижние MDI-иконки —
+  26 px, рабочий frame — до 1280 px; удалён фиксированный корень панели.
+- Возврат поддерживает House v13, Rooms v11, Actions и Infrastructure с
+  one-shot hand-off и сохранением принятого маршрута в localStorage.
+- Refresh получил single-flight, минимум 900 мс, success/error на 1400 мс,
+  честную обработку ошибок Recorder/API, ARIA, reduced motion и очистку таймеров.
+- Unload удаляет маршрут только если он зарегистрирован этой интеграцией.
+- Добавлены канонический валидатор, production regression harness и проверки CI;
+  browser/Home Assistant/iPhone acceptance остаётся отдельным GAP.
+
 ## 0.1.4 — 2026-09-08
 
 - A18: неполная статистика воды больше не отображается как полный итог двух счётчиков.

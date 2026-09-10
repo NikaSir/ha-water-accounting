@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 DOMAIN = "water_accounting"
-INTEGRATION_VERSION = "0.1.4"
-UI_VERSION = "0.1.4"
-UI_STANDARD_VERSION = "1.9"
+INTEGRATION_VERSION = "0.1.5"
+UI_VERSION = "0.1.5"
+UI_STANDARD_VERSION = "2.2"
 
 ENTITY_MAP: dict[str, str] = {
     "pressure_drinking": "sensor.nikas_h2000_pro_pitevaia_voda",

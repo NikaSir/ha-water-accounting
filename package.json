@@ -1,10 +1,10 @@
 {
   "name": "ha-water-accounting",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "node scripts/build.mjs --check && node scripts/check-panel.mjs && node scripts/check-statistics.mjs && python -m unittest discover -s tests -v"
+    "check": "node scripts/build.mjs --check && node scripts/check-panel.mjs && node scripts/check-statistics.mjs && node tests/water_ui_v22_harness.mjs && python scripts/check_nikas_ui_standard.py && python -m unittest discover -s tests -v"
   }
 }

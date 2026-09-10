@@ -50,7 +50,8 @@ class RepositoryContractTests(unittest.TestCase):
             contract["ui_version"],
             standard["ui_version"],
         }
-        self.assertEqual(versions, {"0.1.4"})
+        self.assertEqual(versions, {"0.1.5"})
+        self.assertEqual(constants["UI_STANDARD_VERSION"], "2.2")
         self.assertEqual(manifest["dependencies"], ["http", "panel_custom"])
         self.assertEqual(panel_manifest["panel_root"], "/dashboard-water")
         self.assertEqual(contract["entry_route"], "/dashboard-water")
@@ -90,6 +91,9 @@ class RepositoryContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         styles = (COMPONENT / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+        shell = (ROOT / "templates" / "shell_v2" / "nikas-specialized-shell.js").read_text(
+            encoding="utf-8"
+        )
         overview = core[
             core.index("\n  _overviewMarkup() {") : core.index("\n  _thresholdsMarkup() {")
         ]
@@ -98,7 +102,7 @@ class RepositoryContractTests(unittest.TestCase):
         ]
         self.assertNotIn("Пороговые значения давления", overview)
         self.assertIn("this._thresholdsMarkup()", meters)
-        self.assertIn(".header-title:active", styles)
+        self.assertIn(".nikas-shell__title", shell)
         self.assertIn("grid-template-columns: repeat(var(--bucket-count), minmax(0, 1fr))", styles)
         self.assertNotIn("calc(var(--bucket-count) * 21px)", styles)
 

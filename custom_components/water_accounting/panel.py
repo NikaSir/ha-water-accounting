@@ -24,6 +24,7 @@ PANEL_ICON = "mdi:water"
 PANEL_WEB_COMPONENT = "nikas-water-accounting-panel"
 PANEL_STATIC_URL = "/water_accounting_panel"
 PANEL_STATIC_REGISTERED = "panel_static_registered"
+PANEL_OWNED = "panel_owned"
 PANEL_DIRECTORY = Path(__file__).parent / "frontend"
 PANEL_BUNDLE = "water-accounting-panel.js"
 
@@ -62,6 +63,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         domain_data[PANEL_STATIC_REGISTERED] = True
 
     if frontend.async_panel_exists(hass, PANEL_URL_PATH):
+        domain_data.setdefault(PANEL_OWNED, False)
         return
 
     await panel_custom.async_register_panel(
@@ -76,8 +78,13 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         handle_safe_area=True,
         config=PANEL_METADATA,
     )
+    domain_data[PANEL_OWNED] = True
 
 
 def async_unregister_panel(hass: HomeAssistant) -> None:
     """Unregister the custom panel."""
+    domain_data = hass.data.get(DOMAIN, {})
+    if not domain_data.get(PANEL_OWNED):
+        return
     frontend.async_remove_panel(hass, PANEL_URL_PATH, warn_if_unknown=False)
+    domain_data[PANEL_OWNED] = False

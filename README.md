@@ -69,13 +69,15 @@
 node scripts/build.mjs
 node scripts/check-panel.mjs
 node scripts/check-statistics.mjs
+node tests/water_ui_v22_harness.mjs
+python scripts/check_nikas_ui_standard.py
 python -m unittest discover -s tests -v
 ```
 
-Production-файл `custom_components/water_accounting/frontend/water-accounting-panel.js` генерируется детерминированно из zoom-контроллера, frontend-ядра и CSS. Во время работы панели нет runtime-импортов.
+Production-файл `custom_components/water_accounting/frontend/water-accounting-panel.js` генерируется детерминированно из канонического Shell v2.1, zoom-контроллера, frontend-ядра и CSS. Во время работы панели нет runtime-импортов.
 
 ## Совместимость интерфейса
 
-Панель следует NikaS Specialized Panel UI Standard v1.9 и Navigation Contract v1.1: постоянные Header / рабочая область / нижние вкладки, gesture-only масштаб 75–200%, нативная прокрутка при 100%, стабильные DOM-поддеревья вкладок и безопасный возврат в базовую панель.
+Панель следует NikaS Specialized Panel UI Standard v2.2 и Navigation Contract v1.2: host-bound Shell v2.1, постоянные Header / рабочая область / нижние вкладки, gesture-only масштаб 75–200%, нативная прокрутка при 100%, capture-phase граничный scroll guard, стабильные DOM-поддеревья вкладок и безопасный возврат в исходную базовую панель.
 
 Лицензия: MIT.

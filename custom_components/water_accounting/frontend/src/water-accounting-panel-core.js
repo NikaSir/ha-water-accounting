@@ -2,7 +2,7 @@
 
 const WATER_APP = Object.freeze({
   title: "Учёт воды",
-  uiVersion: "0.1.4",
+  uiVersion: "0.1.5",
   preferredView: "overview",
   safeReturnRoute: "/dashboard-house-v13/home",
   tabs: [
@@ -38,10 +38,6 @@ const WATER_APP = Object.freeze({
 });
 
 const WATER_CSS = "__WATER_ACCOUNTING_CSS__";
-const SOURCE_ROUTE_KEY = "nikas.specialized.source_route.v1";
-const SOURCE_ROUTE_AT_KEY = "nikas.specialized.source_route_at.v1";
-const RETURN_ROUTE_KEY = "nikas.water-accounting.return_route.v1";
-const SOURCE_ROUTE_TTL_MS = 30_000;
 const VIEW_STORAGE_KEY = "nikas.water-accounting.view.v1";
 const PERIOD_STORAGE_KEY = "nikas.water-accounting.period.v1";
 const VALID_VIEWS = new Set(WATER_APP.tabs.map(function (tab) { return tab[0]; }));
@@ -58,73 +54,23 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function canonicalBaseRoute(pathname) {
-  if (pathname === "/dashboard-house-v13" || pathname.startsWith("/dashboard-house-v13/")) {
-    return "/dashboard-house-v13/home";
-  }
-  if (pathname === "/dashboard-actions" || pathname.startsWith("/dashboard-actions/")) {
-    return "/dashboard-actions/home";
-  }
-  if (pathname === "/dashboard-infrastructure" || pathname.startsWith("/dashboard-infrastructure/")) {
-    return "/dashboard-infrastructure/overview";
-  }
-  return null;
-}
-
 function safeReturnRoute(value) {
-  if (!value) return null;
-  try {
-    const url = new URL(decodeURIComponent(String(value).trim()), window.location.origin);
-    if (url.origin !== window.location.origin) return null;
-    return canonicalBaseRoute(url.pathname);
-  } catch (_error) {
-    return null;
-  }
+  return normalizeNikasBaseRoute(value);
 }
 
 function resolveReturnRoute(panel) {
-  const current = new URL(window.location.href);
-  const explicit = safeReturnRoute(current.searchParams.get("return_to"))
-    || safeReturnRoute(current.searchParams.get("from"));
-  let handedOff = null;
-  let saved = null;
-  try {
-    const rawRoute = sessionStorage.getItem(SOURCE_ROUTE_KEY);
-    const rawAt = sessionStorage.getItem(SOURCE_ROUTE_AT_KEY);
-    sessionStorage.removeItem(SOURCE_ROUTE_KEY);
-    sessionStorage.removeItem(SOURCE_ROUTE_AT_KEY);
-    if (rawRoute !== null && rawAt !== null) {
-      const at = Number(rawAt);
-      const age = Date.now() - at;
-      if (Number.isFinite(at) && age >= 0 && age <= SOURCE_ROUTE_TTL_MS) {
-        handedOff = safeReturnRoute(rawRoute);
-      }
-    }
-    saved = safeReturnRoute(sessionStorage.getItem(RETURN_ROUTE_KEY));
-  } catch (_error) {
-    // Session persistence is optional.
-  }
-  const configured = safeReturnRoute(panel._panel && panel._panel.config
-    ? panel._panel.config.parent_route
-    : null);
-  const route = explicit
-    || handedOff
-    || saved
-    || safeReturnRoute(document.referrer)
-    || configured
-    || WATER_APP.safeReturnRoute;
-  try {
-    sessionStorage.setItem(RETURN_ROUTE_KEY, route);
-  } catch (_error) {
-    // Session persistence is optional.
-  }
-  return route;
+  return captureNikasShellReturnRoute({
+    panelId: "water-accounting",
+    parentRoute: panel._panel && panel._panel.config
+      ? panel._panel.config.parent_route
+      : null,
+    safeReturnRoute: WATER_APP.safeReturnRoute,
+  });
 }
 
 function navigateToSource(panel) {
   const route = safeReturnRoute(panel._returnRoute) || WATER_APP.safeReturnRoute;
-  window.history.pushState(null, "", route);
-  window.dispatchEvent(new Event("location-changed"));
+  navigateNikasShell(route);
 }
 
 function numeric(value) {
@@ -195,6 +141,11 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     this._statsPool = new WaterTaskPool(2);
     this._overviewStatsRequested = false;
     this._refreshing = false;
+    this._refreshToken = 0;
+    this._refreshDelayTimer = null;
+    this._refreshResultTimer = null;
+    this._toastTimer = null;
+    this._removeScrollBoundaryGuard = null;
     this._hold = null;
     this._holdFiredUntil = 0;
   }
@@ -224,6 +175,31 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     this._queuePatch();
   }
 
+  disconnectedCallback() {
+    this._refreshToken += 1;
+    this._refreshing = false;
+    if (this._refreshDelayTimer !== null) {
+      window.clearTimeout(this._refreshDelayTimer.id);
+      this._refreshDelayTimer.resolve();
+      this._refreshDelayTimer = null;
+    }
+    if (this._refreshResultTimer !== null) {
+      window.clearTimeout(this._refreshResultTimer);
+      this._refreshResultTimer = null;
+    }
+    if (this._toastTimer !== null) {
+      window.clearTimeout(this._toastTimer);
+      this._toastTimer = null;
+    }
+    const previousToast = this.shadowRoot.querySelector(".panel-toast");
+    if (previousToast) previousToast.classList.remove("visible");
+    if (this._removeScrollBoundaryGuard) {
+      this._removeScrollBoundaryGuard();
+      this._removeScrollBoundaryGuard = null;
+    }
+    this._cancelHold();
+  }
+
   _config() {
     const config = this._panel && this._panel.config ? this._panel.config : {};
     const tabs = Array.isArray(config.tabs) && config.tabs.length
@@ -242,25 +218,29 @@ class NikaSWaterAccountingPanel extends HTMLElement {
 
   _mountShell() {
     if (this._shellMounted || !this.isConnected) return;
-    this._returnRoute = resolveReturnRoute(this);
+    if (this._returnRoute == null) this._returnRoute = resolveReturnRoute(this);
     const config = this._config();
-    this.shadowRoot.innerHTML = '<style>' + WATER_CSS + '</style>'
-      + '<div class="app-shell">'
-      + '<header class="app-header">'
-      + '<button type="button" class="header-action" id="menu" aria-label="Меню Home Assistant">'
+    this.shadowRoot.innerHTML = '<style>' + WATER_CSS + nikasShellV2Styles() + '</style>'
+      + '<div class="app-shell nikas-shell">'
+      + '<header class="app-header nikas-shell__header">'
+      + '<button type="button" class="header-action nikas-shell__side-action" id="menu" aria-label="Меню Home Assistant">'
       + '<ha-icon icon="mdi:menu"></ha-icon></button>'
-      + '<button type="button" class="header-title" id="return-source" aria-label="Вернуться в базовую панель NikaS">'
+      + '<button type="button" class="header-title nikas-shell__title" id="return-source" aria-label="Вернуться в базовую панель NikaS">'
       + '<strong>' + escapeHtml(config.title) + '</strong>'
-      + '<span>UI v' + escapeHtml(config.uiVersion) + '</span></button>'
-      + '<button type="button" class="header-action" id="refresh" aria-label="Обновить">'
+      + '<small>UI v' + escapeHtml(config.uiVersion) + '</small></button>'
+      + '<button type="button" class="header-action nikas-shell__side-action nikas-shell__side-action--right" id="refresh" aria-label="Обновить">'
       + '<ha-icon icon="mdi:refresh"></ha-icon></button>'
       + '</header>'
-      + '<main class="canvas-viewport" aria-label="Рабочая область панели">'
-      + '<div class="work-canvas"></div></main>'
-      + '<nav class="tabbar" aria-label="Разделы"></nav>'
+      + '<main class="canvas-viewport nikas-shell__viewport" aria-label="Рабочая область панели">'
+      + '<div class="work-canvas nikas-shell__canvas"><div class="work-content nikas-shell__content"></div></div></main>'
+      + '<nav class="tabbar nikas-shell__tabs" aria-label="Разделы"></nav>'
       + '<div class="scale-status" role="status" aria-live="polite">Масштаб 100%</div>'
       + '<div class="panel-toast" role="status" aria-live="polite"></div>'
       + '</div>';
+    this._removeScrollBoundaryGuard = createNikasShellScrollBoundaryGuard({
+      host: this,
+      viewport: this.shadowRoot.querySelector(".canvas-viewport"),
+    });
     this._bindShellEvents();
     this._renderTabBar();
     this._activateView(this._view, false);
@@ -343,14 +323,15 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     const nav = this.shadowRoot.querySelector(".tabbar");
     if (!nav || nav.childElementCount) return;
     const tabs = this._config().tabs;
-    nav.style.setProperty("--water-tab-count", String(Math.max(1, tabs.length)));
+    nav.style.setProperty("--nikas-shell-tab-count", String(Math.max(1, tabs.length)));
     tabs.forEach((tab) => {
       const button = document.createElement("button");
       button.type = "button";
+      button.className = "nikas-shell__tab";
       button.dataset.view = tab[0];
       button.setAttribute("aria-label", tab[2]);
       button.innerHTML = '<ha-icon icon="' + escapeHtml(tab[1]) + '"></ha-icon>'
-        + '<span>' + escapeHtml(tab[2]) + '</span>';
+        + '<small>' + escapeHtml(tab[2]) + '</small>';
       nav.appendChild(button);
     });
   }
@@ -369,7 +350,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     root.dataset.viewRoot = view;
     root.hidden = true;
     root.innerHTML = this._viewMarkup(view);
-    this.shadowRoot.querySelector(".work-canvas").appendChild(root);
+    this.shadowRoot.querySelector(".work-content").appendChild(root);
     this._views.set(view, root);
     this._applyEntityTargets(root);
     return root;
@@ -1123,40 +1104,102 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       + ", полив " + (bucket.irrigation == null ? "— (нет полных данных)" : this._formatVolume(bucket.irrigation));
   }
 
-  async _refresh() {
-    if (this._refreshing) return;
-    this._refreshing = true;
+  _setRefreshVisual(state) {
     const button = this.shadowRoot.querySelector("#refresh");
-    if (button) {
-      button.classList.add("busy");
-      button.setAttribute("aria-busy", "true");
+    if (!button) return;
+    const icon = button.querySelector("ha-icon");
+    const details = {
+      idle: ["mdi:refresh", "Обновить", "var(--primary-color, #03a9d9)"],
+      busy: ["mdi:refresh", "Обновление данных", "var(--primary-color, #03a9d9)"],
+      success: ["mdi:check", "Данные обновлены", "#43a047"],
+      error: ["mdi:alert-circle-outline", "Ошибка обновления", "#e53935"],
+    }[state] || ["mdi:refresh", "Обновить", "var(--primary-color, #03a9d9)"];
+    button.classList.toggle("busy", state === "busy");
+    button.classList.toggle("success", state === "success");
+    button.classList.toggle("error", state === "error");
+    button.disabled = state === "busy";
+    button.setAttribute("aria-label", details[1]);
+    button.setAttribute("aria-busy", String(state === "busy"));
+    button.style.color = details[2];
+    if (icon) icon.setAttribute("icon", details[0]);
+  }
+
+  _delay(milliseconds) {
+    return new Promise((resolve) => {
+      const timer = {
+        id: null,
+        resolve: resolve,
+      };
+      timer.id = window.setTimeout(() => {
+        if (this._refreshDelayTimer === timer) this._refreshDelayTimer = null;
+        resolve();
+      }, milliseconds);
+      this._refreshDelayTimer = timer;
+    });
+  }
+
+  async _refresh() {
+    if (this._refreshing) return false;
+    if (this._refreshResultTimer !== null) {
+      window.clearTimeout(this._refreshResultTimer);
+      this._refreshResultTimer = null;
     }
+    if (this._toastTimer !== null) {
+      window.clearTimeout(this._toastTimer);
+      this._toastTimer = null;
+    }
+    const previousToast = this.shadowRoot.querySelector(".panel-toast");
+    if (previousToast) previousToast.classList.remove("visible");
+    const token = ++this._refreshToken;
+    this._refreshing = true;
+    this._setRefreshVisual("busy");
+    const startedAt = typeof performance !== "undefined" && performance.now
+      ? performance.now()
+      : Date.now();
     const entities = Array.from(new Set(Object.values(this._config().entities).filter(Boolean)));
     const refreshPeriods = this._view === "overview" ? ["24h", "30d"] : [this._period];
     refreshPeriods.forEach((key) => this._statsLoads.delete(key));
+    let success = false;
     try {
-      if (this._hass && typeof this._hass.callService === "function") {
-        await this._hass.callService("homeassistant", "update_entity", { entity_id: entities });
+      if (!entities.length || !this._hass || typeof this._hass.callService !== "function") {
+        throw new Error("Home Assistant refresh service unavailable");
       }
-      await Promise.all(refreshPeriods.map((key) => this._loadPeriod(key)));
+      await this._hass.callService("homeassistant", "update_entity", { entity_id: entities });
+      const loads = await Promise.all(refreshPeriods.map((key) => this._loadPeriod(key)));
+      if (loads.some((load) => !load || load.status !== "complete")) {
+        throw new Error("Recorder refresh incomplete");
+      }
+      success = true;
     } catch (_error) {
-      this._showToast("Обновить данные не удалось");
-    } finally {
-      this._refreshing = false;
-      if (button) {
-        button.classList.remove("busy");
-        button.removeAttribute("aria-busy");
-      }
-      this._queuePatch();
+      success = false;
     }
+    const elapsed = (typeof performance !== "undefined" && performance.now
+      ? performance.now()
+      : Date.now()) - startedAt;
+    if (elapsed < 900) await this._delay(900 - elapsed);
+    if (token !== this._refreshToken || !this.isConnected) return success;
+    this._refreshing = false;
+    this._setRefreshVisual(success ? "success" : "error");
+    if (!success) this._showToast("Обновить данные не удалось");
+    this._queuePatch();
+    this._refreshResultTimer = window.setTimeout(() => {
+      if (token !== this._refreshToken) return;
+      this._refreshResultTimer = null;
+      this._setRefreshVisual("idle");
+    }, 1400);
+    return success;
   }
 
   _showToast(message) {
     const toast = this.shadowRoot.querySelector(".panel-toast");
     if (!toast) return;
+    if (this._toastTimer !== null) window.clearTimeout(this._toastTimer);
     toast.textContent = message;
     toast.classList.add("visible");
-    window.setTimeout(() => toast.classList.remove("visible"), 2200);
+    this._toastTimer = window.setTimeout(() => {
+      this._toastTimer = null;
+      toast.classList.remove("visible");
+    }, 1400);
   }
 }
 

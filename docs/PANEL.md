@@ -6,14 +6,16 @@
 - безопасный возврат: `/dashboard-house-v13/home`;
 - web component: `nikas-water-accounting-panel`;
 - четыре постоянные нижние вкладки: `overview`, `consumption`, `meters`, `diagnostics`;
-- масштабируется только `.work-canvas` внутри единственной `.canvas-viewport`;
-- Header и Bottom Tab Bar не входят в масштабируемую область.
+- канонический host-bound Shell v2.1: Header `60 px`, рабочая строка и Bottom Tab Bar `64 px`;
+- масштабируется только `.nikas-shell__canvas` внутри единственной `.nikas-shell__viewport`;
+- Header и Bottom Tab Bar не входят в масштабируемую область, а граничный scroll guard блокирует прокрутку оболочки Home Assistant;
+- Header возвращает в House v13, Rooms v11, Actions или Infrastructure по Navigation Contract v1.2.
 
 ## Источники и безопасность
 
 Карта сущностей и пороги передаются интеграцией через `PANEL_METADATA`, а frontend содержит ту же проверенную карту как безопасный production fallback. Отсутствующие, `unknown`, `unavailable` и нечисловые состояния не превращаются в нормальные значения.
 
-Панель не содержит элементов управления водой. Header Refresh вызывает только `homeassistant.update_entity` для известных сущностей и повторно загружает затронутые периоды Recorder.
+Панель не содержит элементов управления водой. Header Refresh вызывает только `homeassistant.update_entity` для известных сущностей и повторно загружает затронутые периоды Recorder. Повторное нажатие во время запроса блокируется; busy виден минимум 900 мс, затем результат success/error показывается 1400 мс. Ошибка любого обязательного запроса не отображается как успех.
 
 ## Статистика
 
