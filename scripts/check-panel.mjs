@@ -179,38 +179,12 @@ function setLocation(href) {
   };
 }
 
-setLocation("https://ha.local/dashboard-water?return_to=https%3A%2F%2Fevil.example%2Fdashboard-house&from=%2Fdashboard-actions%2Fwhatever");
-session.clear();
-assert.equal(
-  context.testResolveReturnRoute({ _panel: null }),
-  "/dashboard-actions/home",
-  "invalid return_to must not suppress a valid from route",
-);
-setLocation("https://ha.local/dashboard-water?from=%2Fdashboard-house-v13%2Fdetails");
-session.clear();
-assert.equal(
-  context.testResolveReturnRoute({ _panel: null }),
-  "/dashboard-house-v13/home",
-  "current House source route must be canonicalized",
-);
-
-setLocation("https://ha.local/dashboard-water");
-session.clear();
-session.set("nikas.specialized.source_route.v1", "/dashboard-infrastructure/water");
-session.set("nikas.specialized.source_route_at.v1", String(Date.now()));
-assert.equal(
-  context.testResolveReturnRoute({ _panel: null }),
-  "/dashboard-infrastructure/overview",
-  "fresh source hand-off must be canonicalized",
-);
-
-setLocation("https://ha.local/dashboard-water?from=%2Fdashboard-rooms-v11%2Fdetails");
-session.clear();
-assert.equal(
-  context.testResolveReturnRoute({ _panel: null }),
-  "/dashboard-rooms-v11/rooms",
-  "Rooms source route must be canonicalized",
-);
+for (const from of ["/dashboard-actions/home", "/dashboard-house-v13/details", "/dashboard-rooms-v11/details"]) {
+  setLocation("https://ha.local/dashboard-water?return_to="+from+"&from="+from);
+  session.set("nikas.specialized.source_route.v1", from);
+  session.set("nikas.specialized.source_route_at.v1", String(Date.now()));
+  assert.equal(context.testResolveReturnRoute({ _panel: null }), "/home/overview", "main title must ignore opening source");
+}
 
 const pool = new context.TestPool(2);
 let active = 0;

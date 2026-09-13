@@ -22,7 +22,7 @@ class PanelUiStandardV22Tests(unittest.TestCase):
 
     def test_canonical_documents_and_shell_are_pinned(self) -> None:
         self.assertEqual(self.profile["version"], "2.2")
-        self.assertEqual(self.profile["navigation_contract_version"], "1.2")
+        self.assertEqual(self.profile["navigation_contract_version"], "1.3")
         for path_key, hash_key in (
             ("standard_path", "standard_sha256"),
             ("navigation_contract_path", "navigation_contract_sha256"),
@@ -59,6 +59,8 @@ class PanelUiStandardV22Tests(unittest.TestCase):
         self.assertNotIn("100dvh", self.bundle)
 
     def test_navigation_contract_includes_all_base_routes(self) -> None:
+        import subprocess
+        subprocess.run(["node", "tests/header_parent_navigation.mjs"], cwd=ROOT, check=True)
         for route in (
             "/dashboard-house-v13/home",
             "/dashboard-rooms-v11/rooms",
@@ -66,7 +68,6 @@ class PanelUiStandardV22Tests(unittest.TestCase):
             "/dashboard-infrastructure/overview",
         ):
             self.assertIn(route, self.bundle)
-        self.assertIn('...params.getAll("return_to")', self.bundle)
         self.assertIn("if (this._returnRoute == null)", self.bundle)
         self.assertNotIn("history.back(", self.bundle)
 

@@ -2,9 +2,9 @@
 
 const WATER_APP = Object.freeze({
   title: "Учёт воды",
-  uiVersion: "0.1.5",
+  uiVersion: "0.1.6",
   preferredView: "overview",
-  safeReturnRoute: "/dashboard-house-v13/home",
+  safeReturnRoute: "/home/overview",
   tabs: [
     ["overview", "mdi:water-outline", "Обзор"],
     ["consumption", "mdi:chart-bar", "Расход"],
@@ -225,7 +225,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       + '<header class="app-header nikas-shell__header">'
       + '<button type="button" class="header-action nikas-shell__side-action" id="menu" aria-label="Меню Home Assistant">'
       + '<ha-icon icon="mdi:menu"></ha-icon></button>'
-      + '<button type="button" class="header-title nikas-shell__title" id="return-source" aria-label="Вернуться в базовую панель NikaS">'
+      + '<button type="button" class="header-title nikas-shell__title" id="return-source" aria-label="Вернуться на главную панель">'
       + '<strong>' + escapeHtml(config.title) + '</strong>'
       + '<small>UI v' + escapeHtml(config.uiVersion) + '</small></button>'
       + '<button type="button" class="header-action nikas-shell__side-action nikas-shell__side-action--right" id="refresh" aria-label="Обновить">'
