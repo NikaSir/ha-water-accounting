@@ -28,8 +28,8 @@ def main() -> None:
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     require(config.get("version") == "2.2", "NikaS UI standard version must be 2.2")
     require(
-        config.get("navigation_contract_version") == "1.2",
-        "NikaS navigation contract version must be 1.2",
+        config.get("navigation_contract_version") == "1.3",
+        "NikaS navigation contract version must be 1.3",
     )
 
     standard_path = config.get("standard_path", "docs/NIKAS_SPECIALIZED_PANEL_UI_STANDARD.md")
@@ -95,16 +95,11 @@ def main() -> None:
             "frontend delivery standard retains the superseded 28px icon rule",
         )
     for clause in (
-        "Center title plaque — return to the source NikaS base panel",
-        'sessionStorage["nikas.specialized.source_route.v1"]',
-        "return_to",
+        "Center title plaque — open the immediate parent",
         "history.pushState()",
         "history.back()",
-        "Capture precedence is:",
         "exact form `UI vX.Y.Z`",
         "focus state and pressed response",
-        "same click/keyboard handler",
-        "Ambient shell synchronization",
         "Data truth and command safety",
         "Production bundle and version coherence",
         "Home Assistant host boundary",
@@ -115,8 +110,6 @@ def main() -> None:
         "never displays the Home Assistant refresh spinner",
         "Five destinations, as used by Keenetic, conform to this limit.",
         "Build-time shell source",
-        "/dashboard-house-v13/home",
-        "/dashboard-rooms-v11/rooms",
         "Peer-device status lamps — Stark SolarPower reference",
         "red overrides orange, orange overrides green",
         "Unchanged lamp state produces no DOM write.",
@@ -154,11 +147,6 @@ def main() -> None:
         "/dashboard-actions/home",
         "/dashboard-infrastructure/overview",
         "/starline",
-        "nikas.specialized.source_route_at.v1",
-        "same click/keyboard handler",
-        "Both hand-off values are required",
-        "timestamp from the future",
-        "partial storage write is rolled back",
         "A missing, orphaned or mismatched public route is a blocking defect.",
     ):
         require(clause in navigation_contract, f"canonical navigation clause missing: {clause}")
@@ -298,59 +286,12 @@ def main() -> None:
 
     require(runtime_files, f"{role} repository must declare checked runtime_files")
 
-    for token in (
-        "nikas.specialized.source_route.v1",
-        "nikas.specialized.source_route_at.v1",
-        "/dashboard-house-v13/home",
-        "/dashboard-rooms-v11/rooms",
-        "/dashboard-actions/home",
-        "/dashboard-infrastructure/overview",
-    ):
-        require(token in sources, f"runtime route contract missing token: {token}")
+    require("/home/overview" in sources, "native overview title destination missing")
     require('"/dashboard-house"' not in sources, "legacy /dashboard-house route is forbidden in runtime")
     require("'/dashboard-house'" not in sources, "legacy /dashboard-house route is forbidden in runtime")
     require("/dashboard-starline" not in sources, "invalid /dashboard-starline route is forbidden in runtime")
 
     if role == "base":
-        require("sessionStorage" in sources, "base shell must persist the source-route hand-off")
-        markers = config.get("source_handoff", {})
-        require(isinstance(markers, dict) and markers, "base shell must declare source_handoff markers")
-        for name in (
-            "storage_write_marker",
-            "timestamp_write_marker",
-            "rollback_marker",
-            "route_normalizer_marker",
-            "specialized_route_marker",
-            "capture_marker",
-            "navigation_marker",
-            "delegation_marker",
-            "contract_version_marker",
-        ):
-            marker = markers.get(name)
-            require(isinstance(marker, str) and marker, f"source_handoff.{name} must be configured")
-            require(marker in sources, f"base source-route hand-off marker missing: {marker}")
-        require(
-            "rememberSpecializedSourceRoute(window.location.pathname);" not in sources,
-            "ambient shell synchronization must not refresh the source hand-off",
-        )
-        delegated_files = config.get("delegated_navigation_files", [])
-        require(delegated_files, "base shell must list every delegated navigation source")
-        delegation_marker = markers["delegation_marker"]
-        for path in delegated_files:
-            require(
-                delegation_marker in read_relative(path),
-                f"base outbound navigation does not delegate to click-time hand-off: {path}",
-            )
-        for token in (
-            "/dashboard-zont",
-            "/starline",
-            "/dashboard-s8-omni",
-            "/dashboard-irrigation",
-            "/dashboard-ups",
-            "/dashboard-keenetic",
-            "/dashboard-lider",
-        ):
-            require(token in sources, f"canonical specialized-panel route missing from base registry: {token}")
         return
 
     header_return_runtime_path = config.get("header_return_runtime_path", production_entrypoint)
@@ -358,21 +299,8 @@ def main() -> None:
         read_relative(header_return_runtime_path) if header_return_runtime_path else sources
     )
 
-    for token in (
-        "return_to",
-        "from",
-        "history.pushState",
-        "location-changed",
-        "UI v",
-        "sessionStorage",
-        "removeItem(",
-        "window.location.origin",
-        "url.origin",
-        "url.pathname",
-        "document.referrer",
-        "parent_route",
-    ):
-        require(token in header_return_runtime, f"specialized Header-return runtime missing token: {token}")
+    for token in ("history.pushState", "location-changed", "UI v", "/home/overview"):
+        require(token in sources, f"hierarchical Header navigation missing token: {token}")
     require("history.back(" not in sources, "history.back() is forbidden by the NikaS routing contract")
     require(
         re.search(r"/dashboard-starline(?:[/'\"?#]|$)", sources) is None,
@@ -394,10 +322,6 @@ def main() -> None:
         "version_marker",
         "focus_marker",
         "pressed_marker",
-        "explicit_precedence_marker",
-        "capture_once_marker",
-        "timestamp_required_marker",
-        "future_timestamp_rejection_marker",
     ):
         marker = markers.get(name)
         require(isinstance(marker, str) and marker, f"header_return.{name} must be configured")
