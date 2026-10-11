@@ -251,4 +251,4 @@ function makePanel(callService, loadResult = { status: "complete" }) {
   assert.equal(timers.size, 0, "disconnect must clear refresh timers");
 }
 
-process.stdout.write("Water UI 0.2.0-beta001 / NikaS UI 2.2 production regression OK.\n");
+process.stdout.write("Water UI 0.2.0-beta002 / NikaS UI 2.2 production regression OK.\n");
