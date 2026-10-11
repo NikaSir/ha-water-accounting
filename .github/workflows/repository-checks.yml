@@ -35,6 +35,7 @@ jobs:
           node scripts/check-panel.mjs
           node scripts/check-statistics.mjs
           node tests/water_ui_v22_harness.mjs
+          node tests/filter_ui_harness.mjs
           python scripts/check_nikas_ui_standard.py
 
       - name: Validate integration contract

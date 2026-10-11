@@ -2,13 +2,14 @@
 
 const WATER_APP = Object.freeze({
   title: "Учёт воды",
-  uiVersion: "0.1.6",
+  uiVersion: "0.2.0-beta001",
   preferredView: "overview",
   safeReturnRoute: "/home/overview",
   tabs: [
     ["overview", "mdi:water-outline", "Обзор"],
     ["consumption", "mdi:chart-bar", "Расход"],
     ["meters", "mdi:gauge", "Счётчики"],
+    ["filters", "mdi:water-check", "Фильтры"],
     ["diagnostics", "mdi:stethoscope", "Диагн."],
   ],
   entities: Object.freeze({
@@ -129,6 +130,9 @@ class NikaSWaterAccountingPanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
+    this._filterData = null;
+    this._filterBusy = false;
+    this._filterTimer = null;
     this._hass = null;
     this._panel = null;
     this._shellMounted = false;
@@ -176,6 +180,8 @@ class NikaSWaterAccountingPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
+    window.clearTimeout(this._filterTimer);
+    this._filterTimer = null;
     this._refreshToken += 1;
     this._refreshing = false;
     if (this._refreshDelayTimer !== null) {
@@ -269,6 +275,8 @@ class NikaSWaterAccountingPanel extends HTMLElement {
         navigateToSource(this);
       } else if (button.id === "refresh") {
         this._refresh();
+      } else if (button.dataset.filterAction) {
+        this._filterAction(button);
       } else if (button.dataset.view) {
         this._activateView(button.dataset.view, true);
       } else if (button.dataset.period) {
@@ -276,6 +284,13 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       }
     });
 
+    this.shadowRoot.addEventListener("change", (event) => {
+      if (event.target.id === "filter-profile") {
+        const profile = event.target.value;
+        this.shadowRoot.querySelector("#filter-volume").value = profile === "wound" ? 200 : 100;
+        this.shadowRoot.querySelector("#filter-months").value = 6;
+      }
+    });
     this.shadowRoot.addEventListener("pointerdown", (event) => this._beginHold(event));
     this.shadowRoot.addEventListener("pointermove", (event) => this._moveHold(event));
     ["pointerup", "pointercancel", "pointerleave"].forEach((name) => {
@@ -339,6 +354,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
   _viewMarkup(view) {
     if (view === "consumption") return this._consumptionMarkup();
     if (view === "meters") return this._metersMarkup();
+    if (view === "filters") return this._filtersMarkup();
     if (view === "diagnostics") return this._diagnosticsMarkup();
     return this._overviewMarkup();
   }
@@ -385,8 +401,151 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       if (controller && controller.resetPosition) controller.resetPosition();
       else this.shadowRoot.querySelector(".canvas-viewport").scrollTop = 0;
     }
+    if (next === "filters") this._loadFilters();
     if (next === "consumption") this._loadPeriod(this._period);
     this._queuePatch();
+  }
+
+  _filtersMarkup() {
+    const cards = [["main", "Магистральный BB20"], ["ferrostop", "ЭКСПЕРТ Ферростоп"],
+      ["softening", "ЭКСПЕРТ Смягчение"], ["postcarbon", "ЭКСПЕРТ Посткарбон"]];
+    const input = (id, label, type, extra) => '<label>' + label + '<input id="' + id
+      + '" type="' + type + '" ' + (extra || '') + '></label>';
+    return '<section class="card filter-settings"><h2>Фильтры питьевой воды</h2>'
+      + '<p>Магистральный — по счётчику питьевой воды. Полив не учитывается.</p>'
+      + '<p data-filter-message role="status">Загрузка настроек…</p>'
+      + '<button type="button" data-filter-action="reload">Обновить данные фильтров</button></section>'
+      + cards.map(([key, title]) => '<section class="card filter-card" data-filter-card="' + key + '">'
+        + '<h2>' + title + '</h2><strong data-filter-status="' + key + '">Нет данных</strong>'
+        + '<p data-filter-detail="' + key + '"></p>'
+        + '<div class="filter-form">' + input('date-' + key, 'Дата последней замены', 'date')
+        + (key === 'main' ? input('baseline-main', 'Показание при замене, м³', 'number', 'min="0" step="0.001"') : '')
+        + '</div><div class="filter-actions"><button type="button" data-filter-action="record" data-filter="' + key + '">Сохранить дату'
+        + '</button><button type="button" data-filter-action="replace" data-filter="' + key + '">Картридж заменён</button></div></section>').join('')
+      + '<section class="card filter-settings"><h2>Настройки магистрального фильтра</h2><div class="filter-form">'
+      + '<label>Профиль<select id="filter-profile"><option value="mechanical">Механика BB20 · 5 мкм</option>'
+      + '<option value="wound">Нитка BB20 · 10 мкм</option></select></label>'
+      + input('filter-volume', 'Ресурс, м³', 'number', 'min="0.001" max="10000" step="0.001" required')
+      + input('filter-months', 'Срок, месяцев', 'number', 'min="0.5" max="12" step="0.5" required')
+      + '<label>Контроль<select id="filter-mode"><option value="volume">По объёму</option><option value="time">По времени</option>'
+      + '<option value="both">Что наступит раньше</option></select></label></div>'
+      + '<p>Профили БАРЬЕР: механика — 100 м³; нитка — 200 м³. Срок 6 месяцев для нитки — начальная настройка, не подтверждённая рекомендация производителя. Объём и срок можно изменить.</p></section>'
+      + '<section class="card filter-settings"><h2>Настройки ЭКСПЕРТ Комплекс</h2><div class="filter-form">'
+      + input('filter-people', 'Количество пользователей', 'number', 'min="1" max="20" step="1" required')
+      + input('filter-hardness', 'Жёсткость, мг-экв/л', 'number', 'min="0.01" max="100" step="0.01"')
+      + '<label>Срок смягчения<select id="filter-auto"><option value="auto">По таблице БАРЬЕР</option>'
+      + '<option value="manual">Задать вручную</option></select></label>'
+      + input('months-ferrostop', 'Ферростоп, месяцев', 'number', 'min="0.5" max="12" step="0.5" required')
+      + input('months-softening', 'Смягчение вручную, месяцев', 'number', 'min="0.5" max="12" step="0.5" required')
+      + input('months-postcarbon', 'Посткарбон, месяцев', 'number', 'min="0.5" max="12" step="0.5" required')
+      + '</div><p>Расчёт для 1–3 пользователей и жёсткости до 5 мг-экв/л; не более 6 месяцев. Вне таблицы задайте срок вручную. Начальные сроки Ферростопа и Посткарбона — 6 месяцев. Полмесяца = 15 дней.</p>'
+      + '<button type="button" data-filter-action="settings">Сохранить настройки</button>'
+      + '<p>Настройки не сбрасывают даты и расход. Изменять их может администратор HA.</p></section>';
+  }
+
+  async _loadFilters(fill) {
+    if (this._filterBusy || !this._hass || typeof this._hass.callWS !== "function") return;
+    this._filterBusy = true;
+    try {
+      const data = await this._withTimeout(this._hass.callWS({ type: "water_accounting/filters" }), 15000);
+      this._filterData = data;
+      this._paintFilters(fill || !this._filtersFilled);
+      this._setText("[data-filter-message]", "Данные фильтров актуальны");
+    } catch (error) {
+      this._filterData = null;
+      this._setText("[data-filter-message]", "Не удалось получить данные: " + (error.message || String(error)));
+      this.shadowRoot.querySelectorAll("[data-filter-status]").forEach(node => { node.textContent = "Нет данных"; });
+      this.shadowRoot.querySelectorAll("[data-filter-detail]").forEach(node => { node.textContent = ""; });
+    } finally {
+      this._filterBusy = false;
+      window.clearTimeout(this._filterTimer);
+      if (this.isConnected && this._view === "filters") {
+        this._filterTimer = window.setTimeout(() => this._loadFilters(), 30000);
+      }
+    }
+  }
+
+  _paintFilters(fill) {
+    const data = this._filterData;
+    if (!data || !this._views.has("filters")) return;
+    const cfg = data.settings;
+    const labels = { unconfigured: "Укажите дату замены", unknown: "Нет данных для расчёта",
+      due: "Заменить картридж", warning: "Скоро замена", ok: "Ресурс в норме" };
+    Object.entries(data.status).forEach(([key, item]) => {
+      this._setText('[data-filter-status="' + key + '"]', labels[item.state]);
+      const parts = [];
+      if (item.days != null) parts.push(item.days < 0 ? 'Просрочено дней: ' + Math.abs(item.days) : 'Осталось дней: ' + item.days);
+      if (item.deadline) parts.push('Замена до: ' + item.deadline.split('-').reverse().join('.'));
+      if (item.used != null) parts.push('После замены: ' + this._formatNumber(item.used, 3) + ' м³; осталось: '
+        + this._formatNumber(Math.max(0, item.remaining), 3) + ' м³ (' + Math.round(item.percent) + '%)');
+      if (key === 'main' && item.used == null) parts.push('Нет расхода: проверьте счётчик и показание при замене');
+      if (key === 'softening' && cfg.softening_auto && cfg.cartridges.softening.months == null) parts.push('Укажите жёсткость или задайте срок вручную');
+      this._setText('[data-filter-detail="' + key + '"]', parts.join(' · '));
+      const card = this.shadowRoot.querySelector('[data-filter-card="' + key + '"]');
+      if (card) card.dataset.status = item.state;
+    });
+    if (fill) {
+      const values = { 'filter-profile': cfg.main.profile, 'filter-volume': cfg.main.volume,
+        'filter-months': cfg.main.months, 'filter-mode': cfg.main.mode, 'filter-people': cfg.people,
+        'filter-hardness': cfg.hardness, 'filter-auto': cfg.softening_auto ? 'auto' : 'manual',
+        'date-main': cfg.main.date, 'baseline-main': cfg.main.baseline };
+      Object.entries(cfg.cartridges).forEach(([key, item]) => {
+        values['date-' + key] = item.date;
+        values['months-' + key] = item.months || 6;
+      });
+      Object.entries(values).forEach(([id, value]) => {
+        const node = this.shadowRoot.querySelector('#' + id);
+        if (node) node.value = value == null ? '' : value;
+      });
+      this._filtersFilled = true;
+    }
+    const admin = this._hass.user && this._hass.user.is_admin;
+    this.shadowRoot.querySelectorAll('[data-filter-action]').forEach(button => {
+      button.disabled = button.dataset.filterAction !== 'reload' && !admin;
+    });
+  }
+
+  async _filterAction(button) {
+    const action = button.dataset.filterAction;
+    if (action === 'reload') { this._filtersFilled = false; return this._loadFilters(true); }
+    if (this._filterBusy || !this._filterData) return;
+    const root = this._views.get("filters");
+    const value = id => root.querySelector('#' + id).value;
+    let payload;
+    if (action === 'settings') {
+      for (const node of root.querySelectorAll('.filter-settings input')) {
+        if (!node.reportValidity()) return;
+      }
+      payload = { main: { profile: value('filter-profile'), volume: Number(value('filter-volume')),
+        months: Number(value('filter-months')), mode: value('filter-mode') }, people: Number(value('filter-people')),
+        hardness: value('filter-hardness') ? Number(value('filter-hardness')) : null,
+        softening_auto: value('filter-auto') === 'auto',
+        months: Object.fromEntries(['ferrostop', 'softening', 'postcarbon'].map(key => [key, Number(value('months-' + key))])) };
+    } else {
+      payload = { filter: button.dataset.filter };
+      if (action === 'record') {
+        payload.date = value('date-' + payload.filter);
+        if (!payload.date) { this._setText('[data-filter-message]', 'Укажите дату замены'); return; }
+        if (payload.filter === 'main') {
+          if (!value('baseline-main')) { this._setText('[data-filter-message]', 'Укажите показание при замене'); return; }
+          payload.baseline = Number(value('baseline-main'));
+        }
+      }
+      if (action === 'replace' && !window.confirm('Картридж заменён сегодня? Начать новый отсчёт ресурса?')) return;
+    }
+    this._filterBusy = true;
+    button.disabled = true;
+    try {
+      this._filterData = await this._withTimeout(this._hass.callWS({ type: 'water_accounting/filters', action,
+        payload, revision: this._filterData.revision }), 15000);
+      this._paintFilters(true);
+      this._setText('[data-filter-message]', 'Сохранено');
+    } catch (error) {
+      this._setText('[data-filter-message]', 'Не сохранено: ' + (error.message || String(error)));
+    } finally {
+      this._filterBusy = false;
+      button.disabled = false;
+    }
   }
 
   _overviewMarkup() {
@@ -584,6 +743,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     this._patchDiagnostics();
     this._patchPeriodControls();
     this._patchStatistics();
+    if (this._view === "filters" && !this._filterData && !this._filterBusy) this._loadFilters();
     if (!this._overviewStatsRequested && this._hass && typeof this._hass.callWS === "function") {
       this._overviewStatsRequested = true;
       this._loadPeriod("24h");
