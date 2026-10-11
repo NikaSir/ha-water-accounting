@@ -6,10 +6,21 @@
   "entry_route": "/dashboard-water",
   "safe_return_route": "/home/overview",
   "visible_entry_owner": "house.resources.water",
-  "read_only": true,
-  "ui_version": "0.1.6",
-  "tabs": ["overview", "consumption", "meters", "diagnostics"],
-  "statistics_periods": ["24h", "7d", "30d", "12m"],
+  "read_only": false,
+  "ui_version": "0.2.0-beta001",
+  "tabs": [
+    "overview",
+    "consumption",
+    "meters",
+    "filters",
+    "diagnostics"
+  ],
+  "statistics_periods": [
+    "24h",
+    "7d",
+    "30d",
+    "12m"
+  ],
   "pressure_policy": {
     "drinking": {
       "no_pressure": 0,
