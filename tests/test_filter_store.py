@@ -96,3 +96,19 @@ class FilterStoreTests(unittest.IsolatedAsyncioTestCase):
         await self.adapter.filters_command(self.hass,connection,{'id':2,'action':'settings'})
         self.assertEqual(errors[0][1], 'unauthorized')
         self.assertEqual(self.manager.revision,0)
+
+    async def test_salt_migration_and_reload_preserve_filter_dates(self):
+        await self.manager.load()
+        await self.manager.mutate('replace',{'filter':'ferrostop'},0)
+        await self.manager.mutate('salt_topup',{'kg':25},1)
+        await self.manager.mutate('salt_check',{'level':'low'},2)
+        reloaded=self.adapter.FilterStore(self.hass)
+        await reloaded.load()
+        self.assertEqual(reloaded.data['cartridges']['ferrostop']['date'],'2026-10-12')
+        self.assertEqual(reloaded.data['salt']['last_added_kg'],25)
+        self.assertEqual(reloaded.snapshot()['salt_status']['state'],'low')
+        del self.store.saved['settings']['salt']
+        migrated=self.adapter.FilterStore(self.hass)
+        await migrated.load()
+        self.assertEqual(migrated.data['cartridges']['ferrostop']['date'],'2026-10-12')
+        self.assertIsNone(migrated.data['salt']['last_checked'])

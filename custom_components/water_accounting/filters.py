@@ -13,6 +13,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, ENTITY_MAP
+from .salt_model import salt_defaults, salt_action, salt_status
 from .filter_model import CARTRIDGES, defaults, status, update_settings
 
 
@@ -31,6 +32,8 @@ class FilterStore:
             self.revision = saved.get('revision', 0)
         elif self.data['softening_auto']:
             self.data['cartridges']['softening']['months'] = None
+
+        self.data.setdefault("salt", salt_defaults())
 
     def meter(self):
         state = self.hass.states.get(ENTITY_MAP['drinking_total'])
@@ -51,6 +54,7 @@ class FilterStore:
         today = dt_util.now().date()
         meter = self.meter()
         return {'settings': deepcopy(self.data), 'revision': self.revision,
+                'salt_status': salt_status(self.data['salt'], today),
                 'meter': meter, 'today': today.isoformat(),
                 'status': {'main': status(self.data['main'], today, meter),
                            **{key: status(self.data['cartridges'][key], today) for key in CARTRIDGES}}}
@@ -60,7 +64,9 @@ class FilterStore:
             if revision != self.revision:
                 raise ValueError('Настройки изменились на другом устройстве. Обновите вкладку.')
             data = deepcopy(self.data)
-            if action == 'settings':
+            if action.startswith('salt_'):
+                data['salt'] = salt_action(data['salt'], action[5:], payload, dt_util.now().date())
+            elif action == 'settings':
                 data = update_settings(data, payload)
             else:
                 key = payload.get('filter')
@@ -91,7 +97,7 @@ class FilterStore:
 
 
 @websocket_api.websocket_command({vol.Required('type'): f'{DOMAIN}/filters',
-                                 vol.Optional('action', default='get'): vol.In(('get', 'settings', 'replace', 'record')),
+                                 vol.Optional('action', default='get'): vol.In(('get', 'settings', 'replace', 'record', 'salt_settings', 'salt_topup', 'salt_check')),
                                  vol.Optional('payload', default=dict): dict,
                                  vol.Optional('revision'): int})
 @websocket_api.async_response

@@ -42,3 +42,10 @@ test('refresh failure clears stale success rather than showing resource as curre
   await p._loadFilters();assert.equal(p._filterData,null);
   assert.match(p.shadowRoot.querySelector('[data-filter-message]').textContent,/offline/);
 });
+
+test('salt topup submits mass only and clears input on success',async()=>{
+ const p=fixture();const root=p._views.get('filters');const kg=new NodeMock();kg.value='25';kg.reportValidity=()=>true;root.nodes.set('#salt-kg',kg);
+ let sent;p._hass={callWS:async msg=>{sent=msg;return {revision:4};}};
+ await p._filterAction({dataset:{filterAction:'salt_topup'},disabled:false});
+ assert.equal(sent.action,'salt_topup');assert.equal(sent.payload.kg,25);assert.equal(sent.revision,3);assert.equal(kg.value,'');
+});
