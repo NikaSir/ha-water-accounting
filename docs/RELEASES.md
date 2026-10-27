@@ -3,8 +3,8 @@
 ## Current repository state
 
 - `main` is the canonical source branch, and accepted changes reach it through reviewed pull requests after required checks pass.
-- The integration version is [`0.1.6`](../custom_components/water_accounting/manifest.json).
-- At the 2026-09-14 audit baseline, this repository had no Git tags or GitHub Releases. The README documents installation as a custom HACS repository.
+- The integration version is [`0.2.0-beta003`](../custom_components/water_accounting/manifest.json).
+- Live HACS inspection on 2026-10-27 confirmed commit-based delivery from `main`: installed and available commit `4665b86` (`0.2.0-beta002`), `version_or_commit=commit`, `ref=main`, no releases. The new version is not delivered until its PR reaches `main` and HACS refresh exposes that commit.
 - End-to-end acceptance that HACS exposes and installs the current `main` state was not performed by that audit. A merged commit is accepted source, not confirmed user delivery, until verification succeeds in the target Home Assistant installation.
 
 ## Acceptance gate

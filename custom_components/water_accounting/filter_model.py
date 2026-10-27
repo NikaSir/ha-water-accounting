@@ -12,7 +12,7 @@ CARTRIDGES = ('ferrostop', 'softening', 'postcarbon')
 
 
 def defaults():
-    return {'people': 2, 'hardness': None, 'softening_auto': True,
+    return {'people': 3, 'hardness': None, 'softening_auto': True,
             'main': {'profile': 'mechanical', 'volume': 100, 'months': 6,
                      'mode': 'both', 'date': None, 'baseline': None},
             'cartridges': {key: {'months': 6, 'date': None} for key in CARTRIDGES}}

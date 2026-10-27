@@ -18,6 +18,17 @@ class FilterTests(unittest.TestCase):
         self.assertIsNone(self.m['softening_months'](4, 3))
         self.assertIsNone(self.m['softening_months'](2, 6))
 
+    def test_initial_household_calculation_uses_three_people(self):
+        initial = self.m['defaults']()
+        configured = self.m['update_settings'](initial, {'hardness': 3})
+        self.assertEqual(configured['cartridges']['softening']['months'], 2)
+
+    def test_existing_household_choice_is_preserved(self):
+        configured = self.m['defaults']()
+        configured['people'] = 2
+        updated = self.m['update_settings'](configured, {'hardness': 3})
+        self.assertEqual(updated['cartridges']['softening']['months'], 3.5)
+
     def test_calendar_and_overdue(self):
         self.assertEqual(self.m['deadline']('2026-08-31', 6), date(2027, 2, 28))
         s = self.m['status']({'date':'2026-01-01','months':6}, date(2026,7,2))
