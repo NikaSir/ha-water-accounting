@@ -112,3 +112,76 @@ class FilterStoreTests(unittest.IsolatedAsyncioTestCase):
         await migrated.load()
         self.assertEqual(migrated.data['cartridges']['ferrostop']['date'],'2026-10-12')
         self.assertIsNone(migrated.data['salt']['last_checked'])
+
+    async def test_legacy_migration_preserves_settings_without_inventing_stock(self):
+        saved=self.adapter.defaults()
+        saved['people']=2
+        saved['main'].update(date='2025-10-01',baseline=350)
+        saved['salt']={'dose':1.5,'check_days':6,'level':'unknown','last_added':'2026-01-01',
+                       'last_added_kg':25,'history':[{'action':'topup','date':'2026-01-01','kg':25}]}
+        self.store.saved={'settings':saved,'revision':7}
+        await self.manager.load()
+        snap=self.manager.snapshot()
+        self.assertEqual(snap['revision'],7)
+        self.assertEqual(snap['settings']['people'],2)
+        self.assertEqual(snap['settings']['main']['baseline'],350)
+        self.assertEqual(snap['settings']['salt'].get('dose_basis'),'legacy_unverified')
+        self.assertIsNone(snap['settings']['salt'].get('known_kg'))
+        self.assertIn('treatment',snap['settings'])
+        self.assertEqual(len(snap['settings']['salt']['history']),1)
+
+    async def test_tank_and_cycle_records_survive_reload_without_rewriting_water_meter(self):
+        await self.manager.load()
+        await self.manager.mutate('replace',{'filter':'main'},0)
+        await self.manager.mutate('salt_service',{'remaining_kg':0,'added_kg':5,'refill_l':3},1)
+        await self.manager.mutate('salt_regeneration',{'completed':True,'result':'unverified','water_m3':0.39},2)
+        reloaded=self.adapter.FilterStore(self.hass)
+        await reloaded.load()
+        self.assertEqual(reloaded.data['salt']['estimated_kg'],4)
+        self.assertIsNone(reloaded.data['salt']['known_kg'])
+        self.assertEqual(reloaded.data['salt']['regenerations'],1)
+        self.assertEqual(reloaded.data['main']['baseline'],353.456)
+        self.assertEqual(reloaded.snapshot()['status']['main']['used'],0)
+
+    async def test_only_softener_outlet_can_explicitly_update_barrier_hardness(self):
+        await self.manager.load()
+        for point in ('mains','barrier'):
+            with self.assertRaises(ValueError):
+                await self.manager.mutate('treatment_gh',{'drops':14,'point':point,'apply_to_filter':True},0)
+        self.assertIsNone(self.manager.data['hardness'])
+        self.assertEqual(self.manager.revision,0)
+        await self.manager.mutate('treatment_gh',{'drops':14,'point':'softener','apply_to_filter':True},0)
+        self.assertEqual(self.manager.data['hardness'],4.9924)
+        self.assertEqual(self.manager.data['cartridges']['softening']['months'],1)
+        self.assertEqual(len(self.manager.data['treatment']['gh_history']),1)
+        await self.manager.mutate('treatment_gh',{'drops':4,'point':'barrier'},1)
+        self.assertEqual(self.manager.data['hardness'],4.9924)
+
+    async def test_failed_measurement_save_does_not_change_journal_or_hardness(self):
+        await self.manager.load()
+        self.store.fail=True
+        with self.assertRaises(OSError):
+            await self.manager.mutate('treatment_gh',{'drops':14,'point':'softener','apply_to_filter':True},0)
+        self.assertIsNone(self.manager.data['hardness'])
+        self.assertEqual(self.manager.revision,0)
+        self.assertEqual(self.manager.data['treatment']['gh_history'],[])
+
+    async def test_old_profile_application_preserves_salt_and_filter_records(self):
+        await self.manager.load()
+        await self.manager.mutate('salt_settings',{'dose':1.5},0)
+        await self.manager.mutate('salt_service',{'remaining_kg':0,'added_kg':5},1)
+        await self.manager.mutate('treatment_old_profile',{},2)
+        self.assertEqual(self.manager.data['salt']['dose'],1)
+        self.assertEqual(self.manager.data['salt']['known_kg'],5)
+        self.assertEqual(len(self.manager.data['salt']['history']),1)
+
+    async def test_non_admin_cannot_write_any_new_record(self):
+        await self.manager.load()
+        self.hass.data={'water_accounting':{'filters':self.manager}}
+        errors=[]
+        connection=SimpleNamespace(user=SimpleNamespace(is_admin=False),send_error=lambda *args:errors.append(args))
+        for action in ('salt_service','salt_regeneration','salt_remove','treatment_settings','treatment_gh','treatment_old_profile'):
+            await self.adapter.filters_command(self.hass,connection,{'id':1,'action':action})
+        self.assertEqual(len(errors),6)
+        self.assertTrue(all(item[1]=='unauthorized' for item in errors))
+        self.assertEqual(self.manager.revision,0)

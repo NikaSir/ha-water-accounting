@@ -1069,6 +1069,8 @@ h2 {
 .filter-form label { display: flex; flex-direction: column; gap: 8px; font-size: 14px; min-width: 0; }
 .filter-form input, .filter-form select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; border: 1px solid #58646c; border-radius: 10px; padding: 10px; font: inherit; color: var(--primary-text-color, #eee); background: var(--card-background-color, #222); }
 .filter-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.filter-form .filter-checkbox { flex-direction: row; align-items: center; min-height: 44px; }
+.filter-form .filter-checkbox input { width: 24px; min-height: 24px; flex: 0 0 24px; }
 .filter-card button, .filter-settings button { min-height: 44px; padding: 10px 14px; border: 1px solid #008fb5; border-radius: 10px; color: var(--primary-text-color, #eee); background: rgba(0, 188, 212, .12); font-size: 14px; }
 .filter-card button:disabled, .filter-settings button:disabled { opacity: .45; }
 @media (max-width: 440px) { .filter-form { grid-template-columns: minmax(0, 1fr); } }
