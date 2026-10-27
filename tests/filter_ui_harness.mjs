@@ -7,6 +7,7 @@ class NodeMock {
   constructor() { this.nodes = new Map(); this.listeners = new Map(); this.dataset = {}; this.value = ''; this.textContent = ''; }
   querySelector(s) { return this.nodes.get(s) || null; }
   querySelectorAll(s) { return this.nodes.has(s) ? [this.nodes.get(s)] : []; }
+  reportValidity() { return true; }
   addEventListener(type, fn) { const handlers=this.listeners.get(type)||[];handlers.push(fn);this.listeners.set(type,handlers); }
   dispatchEvent(event) { for(const fn of this.listeners.get(event.type)||[]) fn(event); }
 }
@@ -172,4 +173,176 @@ test('a newly entered identical topup mass remains a draft after an earlier save
   write.resolve(saltSnapshot(4,5));await saving;
   assert.equal(input.value,'5');
   assert.equal(p._filterData.settings.salt.history.length,1);
+});
+
+function treatmentFixture() {
+  const p=saltFixture();const root=p._views.get('filters');
+  for(const [id,value] of Object.entries({
+    'salt-event-date':'2026-10-27','salt-remaining':'0','salt-added':'5','salt-removed':'','salt-refill-l':'3',
+    'salt-remove-kg':'1','cycle-salt':'','cycle-water':'0.39','cycle-refill':'3','cycle-result':'unverified',
+    'gh-date':'2026-10-27','gh-point':'softener','gh-drops':'14',
+    'treatment-resin':'8','treatment-resin-basis':'assumed','treatment-cycle':'1.2','treatment-cycle-basis':'temporary_setting',
+    'treatment-max-days':'6','treatment-backwash':'10','treatment-brine':'75','treatment-refill':'1','treatment-rinse':'6',
+    'treatment-daily':'','treatment-resin-year':'','treatment-resin-date':'','salt-dose-basis':'assumed'
+  })) {
+    const node=new NodeMock();node.value=value;node.reportValidity=()=>true;root.nodes.set('#'+id,node);p.shadowRoot.nodes.set('#'+id,node);
+  }
+  for(const id of ['gh-apply','cycle-completed']) {const node=new NodeMock();node.checked=true;root.nodes.set('#'+id,node);}
+  for(const selector of ['[data-treatment-message]','[data-treatment-summary]','[data-gh-message]','[data-gh-history]','[data-salt-balance]','[data-salt-coverage]']) p.shadowRoot.nodes.set(selector,new NodeMock());
+  context.window.confirm=()=>true;
+  return p;
+}
+
+test('tank service submits explicit zero remaining and separate salt and refill units',async()=>{
+  const p=treatmentFixture();let sent;p._hass.callWS=async msg=>{sent=msg;return saltSnapshot(4,5);};
+  await p._filterAction({dataset:{filterAction:'salt_service'},disabled:false});
+  assert.equal(sent.action,'salt_service');assert.equal(sent.payload.remaining_kg,0);
+  assert.equal(sent.payload.added_kg,5);assert.equal(sent.payload.refill_l,3);
+  assert.equal(sent.payload.removed_kg,null);assert.equal(sent.payload.date,'2026-10-27');
+});
+
+test('GH journal submits raw drops and explicit application of the softener outlet sample',async()=>{
+  const p=treatmentFixture();let sent;p._hass.callWS=async msg=>{sent=msg;return saltSnapshot(4);};
+  await p._filterAction({dataset:{filterAction:'treatment_gh'},disabled:false});
+  assert.equal(sent.payload.drops,14);assert.equal(sent.payload.sample_ml,5);
+  assert.equal(sent.payload.point,'softener');assert.equal(sent.payload.apply_to_filter,true);
+  assert.equal(sent.payload.hardness,undefined);
+});
+
+test('BARRIER outlet GH cannot be submitted as BARRIER input hardness',async()=>{
+  const p=treatmentFixture();p._views.get('filters').querySelector('#gh-point').value='barrier';let calls=0;
+  p._hass.callWS=async()=>{calls++;return saltSnapshot(4);};
+  await p._filterAction({dataset:{filterAction:'treatment_gh'},disabled:false});
+  assert.equal(calls,0);assert.match(p.shadowRoot.querySelector('[data-gh-message]').textContent,/выходе умягчителя/);
+});
+
+test('regeneration requires completed confirmation and preserves separate measured fields',async()=>{
+  const p=treatmentFixture();let sent;p._hass.callWS=async msg=>{sent=msg;return saltSnapshot(4);};
+  await p._filterAction({dataset:{filterAction:'salt_regeneration'},disabled:false});
+  assert.equal(sent.payload.completed,true);assert.equal(sent.payload.salt_kg,null);
+  assert.equal(sent.payload.water_m3,0.39);assert.equal(sent.payload.refill_l,3);
+  assert.equal(sent.payload.result,'unverified');
+  p._views.get('filters').querySelector('#cycle-completed').checked=false;sent=null;
+  await p._filterAction({dataset:{filterAction:'salt_regeneration'},disabled:false});
+  assert.equal(sent,null);
+});
+
+test('profile saves editable assumptions rather than deriving salt consumption from minutes',async()=>{
+  const p=treatmentFixture();let sent;p._hass.callWS=async msg=>{sent=msg;return saltSnapshot(4);};
+  await p._filterAction({dataset:{filterAction:'treatment_settings'},disabled:false});
+  assert.equal(sent.payload.resin_l,8);assert.equal(sent.payload.cycle_m3,1.2);
+  assert.equal(sent.payload.refill_min,1);assert.equal(sent.payload.resin_basis,'assumed');
+  assert.equal(sent.payload.daily_service_m3,null);assert.equal(sent.payload.dose,undefined);
+});
+
+test('saved treatment data renders source points, tentative parameters and estimated stock separately',()=>{
+  const p=treatmentFixture();const data=fullTreatmentSnapshot(4);
+  p._filterData=data;p._paintFilters(true);
+  assert.match(p.shadowRoot.querySelector('[data-salt-balance]').textContent,/нет полных данных.*оценка по дозам: 4.*кг/);
+  assert.match(p.shadowRoot.querySelector('[data-treatment-summary]').textContent,/92 мин.*8.*предварительно/);
+  assert.match(p.shadowRoot.querySelector('[data-gh-history]').textContent,/вход БАРЬЕР.*14.*4,99/);
+  assert.equal(p.shadowRoot.querySelector('#salt-dose-basis').value,'assumed');
+  assert.equal(p.shadowRoot.querySelector('#treatment-resin').value,8);
+});
+
+function fullTreatmentSnapshot(revision) {
+  const data=saltSnapshot(revision,5);
+  data.settings.salt={...data.settings.salt,dose:1,dose_basis:'assumed',regenerations:1};
+  data.salt_status={...data.salt_status,known_remaining_kg:null,estimated_remaining_kg:4,full_cycles:4,nominal_m3:4.8,scenario_days:null};
+  data.settings.treatment={profile:{resin_l:8,resin_basis:'assumed',cycle_m3:1.2,cycle_basis:'temporary_setting',max_days:6,
+    mode:'A-01',time:'03:00',volume_unit:'HU-01',backwash_mode:'F-00',signal:'b-01',
+    backwash_min:10,brine_min:75,refill_min:1,fast_rinse_min:6,daily_service_m3:null},resin_since_year:null,resin_replaced:null,gh_history:[]};
+  data.treatment_status={stage_minutes:92,latest_gh:[{date:'2026-10-27',point:'softener',drops:14,dgh:14,zh:4.9924}]};
+  return data;
+}
+
+function edit(p,id,value,type='input') {
+  const node=p._views.get('filters').querySelector('#'+id);
+  node.id=id;node.value=value;p.shadowRoot.dispatchEvent({type,target:node});
+}
+
+test('a newer treatment draft survives acknowledgement of its previous value',async()=>{
+  const p=treatmentFixture();p._filterData=fullTreatmentSnapshot(3);p._bindShellEvents();
+  const write=deferred();p._hass.callWS=()=>write.promise;
+  const saving=p._filterAction({dataset:{filterAction:'treatment_settings'},disabled:false});
+  edit(p,'treatment-resin','9');
+  write.resolve(fullTreatmentSnapshot(4));await saving;
+  assert.equal(p.shadowRoot.querySelector('#treatment-resin').value,'9');
+});
+
+test('saving salt does not overwrite an unrelated unsaved treatment draft',async()=>{
+  const p=treatmentFixture();p._filterData=fullTreatmentSnapshot(3);p._bindShellEvents();
+  edit(p,'treatment-resin','9');
+  p._hass.callWS=async()=>fullTreatmentSnapshot(4);
+  await p._filterAction({dataset:{filterAction:'salt_topup'},disabled:false});
+  assert.equal(p.shadowRoot.querySelector('#treatment-resin').value,'9');
+});
+
+test('a second cycle cannot inherit measured consumption or confirmed effectiveness from the first',async()=>{
+  const p=treatmentFixture();const root=p._views.get('filters');
+  root.querySelector('#cycle-salt').value='0.8';root.querySelector('#cycle-result').value='confirmed';
+  const sent=[];p._hass.callWS=async msg=>{sent.push(msg);return saltSnapshot(4);};
+  await p._filterAction({dataset:{filterAction:'salt_regeneration'},disabled:false});
+  assert.equal(root.querySelector('#cycle-salt').value,'');
+  assert.equal(root.querySelector('#cycle-water').value,'');
+  assert.equal(root.querySelector('#cycle-refill').value,'');
+  assert.equal(root.querySelector('#cycle-result').value,'unverified');
+  root.querySelector('#cycle-completed').checked=true;
+  await p._filterAction({dataset:{filterAction:'salt_regeneration'},disabled:false});
+  assert.equal(sent[1].payload.salt_kg,null);assert.equal(sent[1].payload.water_m3,null);
+  assert.equal(sent[1].payload.result,'unverified');
+});
+
+test('successful service removal and GH clear committed mass or drops to prevent accidental repeat',async()=>{
+  for(const [action,ids] of [['salt_service',['salt-remaining','salt-added','salt-removed','salt-refill-l']],['salt_remove',['salt-remove-kg']],['treatment_gh',['gh-drops']]]) {
+    const p=treatmentFixture();p._hass.callWS=async()=>saltSnapshot(4);
+    await p._filterAction({dataset:{filterAction:action},disabled:false});
+    for(const id of ids) assert.equal(p._views.get('filters').querySelector('#'+id).value,'',action+' '+id);
+  }
+});
+
+test('a new measured event draft typed during a write survives event reset',async()=>{
+  const p=treatmentFixture();p._bindShellEvents();const write=deferred();p._hass.callWS=()=>write.promise;
+  const saving=p._filterAction({dataset:{filterAction:'salt_regeneration'},disabled:false});
+  edit(p,'cycle-water','0.5');
+  write.resolve(saltSnapshot(4));await saving;
+  assert.equal(p._views.get('filters').querySelector('#cycle-water').value,'0.5');
+});
+
+test('invalid unfinished GH input does not prevent saving independent cartridge settings',async()=>{
+  const p=treatmentFixture();const root=p._views.get('filters');const gh=root.querySelector('#gh-drops');gh.reportValidity=()=>false;
+  root.querySelectorAll=selector=>selector==='.filter-settings input' ? [gh] : [];
+  let sent;p._hass.callWS=async msg=>{sent=msg;return saltSnapshot(4);};
+  await p._filterAction({dataset:{filterAction:'settings'},disabled:false});
+  assert.equal(sent?.action,'settings');
+});
+
+test('a completed background refresh cannot conceal a conflict with a dirty treatment form',async()=>{
+  const p=treatmentFixture();p._filterData=fullTreatmentSnapshot(3);p._filtersFilled=true;p._bindShellEvents();
+  edit(p,'treatment-resin','9');const remote=fullTreatmentSnapshot(4);remote.settings.treatment.profile.resin_l=10;
+  let sent;p._hass.callWS=async msg=>{
+    if(!msg.action)return remote;
+    sent=msg;if(msg.revision!==4)throw new Error('Настройки изменились');return fullTreatmentSnapshot(5);
+  };
+  await p._loadFilters();
+  await p._filterAction({dataset:{filterAction:'treatment_settings'},disabled:false});
+  assert.equal(sent.revision,3);
+  assert.match(p.shadowRoot.querySelector('[data-treatment-message]').textContent,/Не сохранено.*Настройки изменились/);
+  assert.equal(p.shadowRoot.querySelector('#treatment-resin').value,'9');
+});
+
+test('an unrelated successful salt write can advance a dirty form revision when its settings are unchanged',async()=>{
+  const p=treatmentFixture();p._filterData=fullTreatmentSnapshot(3);p._bindShellEvents();edit(p,'treatment-resin','9');
+  const sent=[];p._hass.callWS=async msg=>{sent.push(msg);return fullTreatmentSnapshot(sent.length===1?4:5);};
+  await p._filterAction({dataset:{filterAction:'salt_topup'},disabled:false});
+  await p._filterAction({dataset:{filterAction:'treatment_settings'},disabled:false});
+  assert.equal(sent[1].revision,4);assert.equal(sent[1].payload.resin_l,9);
+});
+
+test('a new GH journal entry does not create a false conflict with unchanged treatment parameters',async()=>{
+  const p=treatmentFixture();p._filterData=fullTreatmentSnapshot(3);p._filtersFilled=true;p._bindShellEvents();edit(p,'treatment-resin','9');
+  const remote=fullTreatmentSnapshot(4);remote.settings.treatment.gh_history=[{date:'2026-10-27',point:'softener',drops:14,dgh:14,zh:4.9924,sample_ml:5}];
+  let sent;p._hass.callWS=async msg=>{if(!msg.action)return remote;sent=msg;return fullTreatmentSnapshot(5);};
+  await p._loadFilters();await p._filterAction({dataset:{filterAction:'treatment_settings'},disabled:false});
+  assert.equal(sent.revision,4);assert.equal(sent.payload.resin_l,9);
 });
