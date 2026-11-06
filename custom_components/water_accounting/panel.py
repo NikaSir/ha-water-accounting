@@ -41,14 +41,13 @@ PANEL_METADATA = {
     "ui_version": UI_VERSION,
     "template_version": UI_STANDARD_VERSION,
     "frontend_bundle": PANEL_BUNDLE,
-    "read_only": False,
+    "read_only": True,
     "entities": ENTITY_MAP,
     "pressure_policy": PRESSURE_POLICY,
     "tabs": [
         ["overview", "mdi:water-outline", "Обзор"],
         ["consumption", "mdi:chart-bar", "Расход"],
         ["meters", "mdi:gauge", "Счётчики"],
-        ["filters", "mdi:water-check", "Фильтры"],
         ["diagnostics", "mdi:stethoscope", "Диагн."],
     ],
 }
