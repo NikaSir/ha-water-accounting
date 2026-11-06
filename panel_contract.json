@@ -6,13 +6,12 @@
   "entry_route": "/dashboard-water",
   "safe_return_route": "/home/overview",
   "visible_entry_owner": "house.resources.water",
-  "read_only": false,
-  "ui_version": "0.2.0-beta004",
+  "read_only": true,
+  "ui_version": "0.3.0-beta001",
   "tabs": [
     "overview",
     "consumption",
     "meters",
-    "filters",
     "diagnostics"
   ],
   "statistics_periods": [
