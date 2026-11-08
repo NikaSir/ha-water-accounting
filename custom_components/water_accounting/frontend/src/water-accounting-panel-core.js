@@ -2,14 +2,15 @@
 
 const WATER_APP = Object.freeze({
   title: "Учёт воды",
-  uiVersion: "0.3.0-beta001",
+  uiVersion: "0.3.0-beta002",
   preferredView: "overview",
   safeReturnRoute: "/home/overview",
   tabs: [
     ["overview", "mdi:water-outline", "Обзор"],
     ["consumption", "mdi:chart-bar", "Расход"],
+    ["statistics", "mdi:chart-box-outline", "Статистика"],
     ["meters", "mdi:gauge", "Счётчики"],
-    ["diagnostics", "mdi:stethoscope", "Диагн."],
+    ["settings", "mdi:cog-outline", "Настройки"],
   ],
   entities: Object.freeze({
     pressure_drinking: "sensor.nikas_h2000_pro_pitevaia_voda",
@@ -148,6 +149,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     this._removeScrollBoundaryGuard = null;
     this._hold = null;
     this._holdFiredUntil = 0;
+    this._initAccountUI();
   }
 
   set hass(value) {
@@ -176,6 +178,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._disconnectAccountUI();
     this._refreshToken += 1;
     this._refreshing = false;
     if (this._refreshDelayTimer !== null) {
@@ -207,7 +210,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       : WATER_APP.tabs;
     return {
       title: config.title || WATER_APP.title,
-      uiVersion: /^\d+\.\d+\.\d+$/.test(String(config.ui_version || ""))
+      uiVersion: /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/.test(String(config.ui_version || ""))
         ? String(config.ui_version)
         : WATER_APP.uiVersion,
       tabs: tabs,
@@ -255,6 +258,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
   }
 
   _bindShellEvents() {
+    this._bindAccountEvents();
     this.shadowRoot.addEventListener("click", (event) => {
       const button = event.target && event.target.closest ? event.target.closest("button") : null;
       if (!button) return;
@@ -339,8 +343,9 @@ class NikaSWaterAccountingPanel extends HTMLElement {
 
   _viewMarkup(view) {
     if (view === "consumption") return this._consumptionMarkup();
+    if (view === "statistics") return this._statisticsReportMarkup();
+    if (view === "settings") return this._settingsMarkup();
     if (view === "meters") return this._metersMarkup();
-    if (view === "diagnostics") return this._diagnosticsMarkup();
     return this._overviewMarkup();
   }
 
@@ -387,6 +392,8 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       else this.shadowRoot.querySelector(".canvas-viewport").scrollTop = 0;
     }
     if (next === "consumption") this._loadPeriod(this._period);
+    if (next === "settings") this._loadAccountSettings(true);
+    if (next === "statistics") this._loadWaterReport();
     this._queuePatch();
   }
 
@@ -501,7 +508,9 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       + this._meterCardMarkup("drinking", "Питьевая вода", "mdi:cup-water")
       + this._meterCardMarkup("irrigation", "Полив", "mdi:sprinkler-variant")
       + '</section>'
-      + this._thresholdsMarkup();
+      + this._thresholdsMarkup()
+      + '<details class="card diagnostic-details"><summary>Диагностика и источники данных</summary>'
+      + this._diagnosticsMarkup() + '</details>';
   }
 
   _meterCardMarkup(prefix, title, icon) {
@@ -554,11 +563,10 @@ class NikaSWaterAccountingPanel extends HTMLElement {
         ],
       },
     ];
-    let content = '<article class="card page-heading"><p class="eyebrow">Обслуживание</p>'
-      + '<h1>Диагностика</h1><p>Фактически привязанные сущности и их доступность.</p></article>'
+    let content = '<p class="field-help">Фактически привязанные сущности и их доступность.</p>'
       + '<article class="card source-card"><div><span>Источники данных</span>'
       + '<strong>ZONT · Elehant · Recorder</strong></div><div><span>Режим</span>'
-      + '<strong>Только чтение</strong></div><div><span>Интерфейс</span>'
+      + '<strong>Мониторинг</strong></div><div><span>Интерфейс</span>'
       + '<strong>UI v' + WATER_APP.uiVersion + '</strong></div></article>';
     groups.forEach((group) => {
       content += '<section class="diagnostic-group"><h2>' + group.title + '</h2><div class="diagnostic-list">';
@@ -598,6 +606,14 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     this._patchDiagnostics();
     this._patchPeriodControls();
     this._patchStatistics();
+    this._loadAccountSettings();
+    this._patchAccountSettings();
+    this._patchWaterReport();
+    if (this._view === "statistics" && this._settingsTrusted) {
+      let key;
+      try { key = this._reportKey(this._accountSettings.settings); } catch (_error) { key = null; }
+      if (!this._reportLoad || (key && this._reportLoad.key !== key)) this._loadWaterReport();
+    }
     if (!this._overviewStatsRequested && this._hass && typeof this._hass.callWS === "function") {
       this._overviewStatsRequested = true;
       this._loadPeriod("24h");
@@ -636,6 +652,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
 
   _formatState(role, format) {
     const state = this._state(role);
+    if (this._isIrrigationRole(role) && this._irrigationInactive() && !this._isAvailable(state)) return "Отключена";
     if (!this._isAvailable(state)) return "Нет данных";
     if (format === "timestamp") {
       const date = new Date(state.state);
@@ -645,6 +662,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
         month: "2-digit",
         hour: "2-digit",
         minute: "2-digit",
+        timeZone: "Europe/Moscow",
       }).format(date);
     }
     if (role === "zont_online") {
@@ -676,6 +694,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     const role = kind === "drinking" ? "pressure_drinking" : "pressure_irrigation";
     const state = this._state(role);
     const value = this._isAvailable(state) ? numeric(state.state) : null;
+    if (kind === "irrigation" && this._irrigationInactive()) return { tone: "inactive", label: "Отключена пользователем", value: value };
     if (value == null) return { tone: "unknown", label: "Нет данных", value: null };
     const policy = this._config().pressurePolicy[kind] || WATER_APP.pressurePolicy[kind];
     if (kind === "drinking") {
@@ -711,7 +730,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       const result = entry[1];
       const card = this.shadowRoot.querySelector('[data-pressure-card="' + kind + '"]');
       if (card) {
-        ["ok", "warn", "bad", "unknown"].forEach((tone) => {
+        ["ok", "warn", "bad", "unknown", "inactive"].forEach((tone) => {
           card.classList.toggle(tone, tone === result.tone);
         });
       }
@@ -735,6 +754,9 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       tone = "unknown";
       title = "Не все данные доступны";
       detail = "Проверьте источники давления";
+    } else if (this._irrigationInactive()) {
+      title = "Питьевая вода в норме";
+      detail = this._irrigationNote();
     }
     const hero = this.shadowRoot.querySelector(".system-hero");
     if (hero) {
@@ -752,9 +774,11 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       const badge = this.shadowRoot.querySelector('[data-meter-badge="' + prefix + '"]');
       if (!badge) return;
       const available = this._isAvailable(state) && numeric(state.state) != null;
-      badge.textContent = available ? "Данные получены" : "Нет данных";
-      badge.classList.toggle("ok", available);
-      badge.classList.toggle("unknown", !available);
+      const inactive = prefix === "irrigation" && this._irrigationInactive();
+      badge.textContent = inactive ? "Отключена" : available ? "Данные получены" : "Нет данных";
+      badge.classList.toggle("ok", available && !inactive);
+      badge.classList.toggle("unknown", !available && !inactive);
+      badge.classList.toggle("inactive", inactive);
     });
   }
 
@@ -769,7 +793,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
   }
 
   _patchDiagnostics() {
-    const root = this._views.get("diagnostics");
+    const root = this._views.get("meters");
     if (!root) return;
     const entities = this._config().entities;
     root.querySelectorAll("[data-diagnostic-role]").forEach((card) => {
@@ -777,14 +801,16 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       const entityId = entities[role] || "Не привязано";
       const state = this._state(role);
       const available = this._isAvailable(state);
+      const inactive = this._isIrrigationRole(role) && this._irrigationInactive();
       this._setText('[data-diagnostic-id="' + role + '"]', entityId, root);
       this._setText('[data-diagnostic-state="' + role + '"]',
-        available ? this._formatState(role, "") : "Нет данных", root);
+        inactive ? "Отключена пользователем" : available ? this._formatState(role, "") : "Нет данных", root);
       this._setText('[data-diagnostic-updated="' + role + '"]',
         state && state.last_updated ? this._formatDateTime(state.last_updated) : "—", root);
       this._setText('[data-diagnostic-attrs="' + role + '"]',
         JSON.stringify(this._diagnosticAttributes(state), null, 2), root);
-      card.classList.toggle("unavailable", !available);
+      card.classList.toggle("unavailable", !available && !inactive);
+      card.classList.toggle("inactive", inactive);
     });
   }
 
@@ -797,6 +823,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       year: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
+      timeZone: "Europe/Moscow",
     }).format(date);
   }
 
@@ -1170,11 +1197,18 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     const startedAt = typeof performance !== "undefined" && performance.now
       ? performance.now()
       : Date.now();
-    const entities = Array.from(new Set(Object.values(this._config().entities).filter(Boolean)));
     const refreshPeriods = this._view === "overview" ? ["24h", "30d"] : [this._period];
     refreshPeriods.forEach((key) => this._statsLoads.delete(key));
     let success = false;
     try {
+      let settingsFresh = true;
+      if (this._hass && typeof this._hass.callWS === "function") {
+        const settings = await this._loadAccountSettings(true);
+        settingsFresh = !!settings;
+      }
+      const entities = Array.from(new Set(Object.entries(this._config().entities)
+        .filter(([role]) => !this._irrigationInactive() || !this._isIrrigationRole(role))
+        .map(([, entity]) => entity).filter(Boolean)));
       if (!entities.length || !this._hass || typeof this._hass.callService !== "function") {
         throw new Error("Home Assistant refresh service unavailable");
       }
@@ -1183,7 +1217,11 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       if (loads.some((load) => !load || load.status !== "complete")) {
         throw new Error("Recorder refresh incomplete");
       }
-      success = true;
+      if (this._view === "statistics") {
+        const report = await this._loadWaterReport(true);
+        if (!report || report.status !== "complete" || !report.result.regenerations.available) throw new Error("Report refresh incomplete");
+      }
+      success = settingsFresh;
     } catch (_error) {
       success = false;
     }
@@ -1216,6 +1254,8 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     }, 1400);
   }
 }
+
+Object.assign(NikaSWaterAccountingPanel.prototype, WaterReportUI);
 
 if (!customElements.get("nikas-water-accounting-panel")) {
   customElements.define("nikas-water-accounting-panel", NikaSWaterAccountingPanel);

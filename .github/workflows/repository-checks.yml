@@ -34,6 +34,7 @@ jobs:
           node --check custom_components/water_accounting/frontend/water-accounting-panel.js
           node scripts/check-panel.mjs
           node scripts/check-statistics.mjs
+          node --test tests/*.test.mjs
           node tests/water_ui_v22_harness.mjs
           python scripts/check_nikas_ui_standard.py
 

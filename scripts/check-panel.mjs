@@ -3,12 +3,14 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 const frontend = "custom_components/water_accounting/frontend";
-const [shell, core, zoom, css, bundle] = await Promise.all([
+const [shell, core, zoom, css, bundle, reportModel, reportUI] = await Promise.all([
   readFile("templates/shell_v2/nikas-specialized-shell.js", "utf8"),
   readFile(`${frontend}/src/water-accounting-panel-core.js`, "utf8"),
   readFile(`${frontend}/src/zoom-controller.js`, "utf8"),
   readFile(`${frontend}/src/styles.css`, "utf8"),
   readFile(`${frontend}/water-accounting-panel.js`, "utf8"),
+  readFile(`${frontend}/src/report-model.js`, "utf8"),
+  readFile(`${frontend}/src/report-ui.js`, "utf8"),
 ]);
 
 assert.equal(
@@ -107,7 +109,7 @@ context.window.localStorage = context.localStorage;
 context.window.sessionStorage = context.sessionStorage;
 vm.createContext(context);
 vm.runInContext(
-  `${shell}\n${core}\nthis.TestPanel = NikaSWaterAccountingPanel; this.TestPool = WaterTaskPool; this.testResolveReturnRoute = resolveReturnRoute;`,
+  `${shell}\n${reportModel}\n${reportUI}\n${core}\nthis.TestPanel = NikaSWaterAccountingPanel; this.TestPool = WaterTaskPool; this.testResolveReturnRoute = resolveReturnRoute;`,
   context,
 );
 

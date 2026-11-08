@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-    <title>Учёт воды · preview</title>
+    <title>Учёт воды · демонстрационные данные</title>
     <style>
       :root {
         color-scheme: light;
@@ -43,6 +43,9 @@
             "mdi:chart-timeline-variant": "▥",
             "mdi:water-outline": "◉",
             "mdi:chart-bar": "▥",
+            "mdi:chart-box-outline": "▥",
+            "mdi:cog-outline": "⚙",
+            "mdi:cog": "⚙",
             "mdi:gauge": "◴",
             "mdi:stethoscope": "+",
             "mdi:water-check": "✓",
@@ -59,6 +62,12 @@
       const query = new URLSearchParams(location.search);
       localStorage.setItem("nikas.water-accounting.view.v1", query.get("view") || "overview");
       localStorage.setItem("nikas.water-accounting.period.v1", query.get("period") || "24h");
+      const NativeDate = Date;
+      const previewNow = NativeDate.parse('2026-11-08T12:00:00Z');
+      window.Date = class extends NativeDate {
+        constructor(...args) { super(...(args.length ? args : [previewNow])); }
+        static now() { return previewNow; }
+      };
     </script>
     <script src="../custom_components/water_accounting/frontend/water-accounting-panel.js"></script>
   </head>
@@ -80,7 +89,7 @@
         irrigation_signal: "sensor.schetchik_vody_svd_20_0020988_signal",
         irrigation_updated: "sensor.schetchik_vody_svd_20_0020988_obnovleno",
       };
-      const stamp = "2026-08-30T15:42:00.000Z";
+      const stamp = new Date().toISOString();
       const state = (value, unit, extra = {}) => ({
         state: String(value),
         attributes: { unit_of_measurement: unit, ...extra },
@@ -101,6 +110,20 @@
         [entities.irrigation_signal]: state(-68, "dBm"),
         [entities.irrigation_updated]: state(stamp, "", { device_class: "timestamp" }),
       };
+      if (query.has('disabled')) {
+        states[entities.pressure_irrigation] = state(0,'bar');
+        states[entities.irrigation_total] = state('unavailable','m³');
+        states[entities.irrigation_updated] = state('unavailable','');
+      }
+      let settingsSnapshot = {revision:0,settings:{statistics_start_date:'2026-10-27',
+        low_day_threshold_l:100,regeneration_verified_from:'2026-10-27',
+        regeneration_verified_through:'2026-11-07',irrigation:{enabled:!query.has('disabled'),
+          reason:query.has('disabled')?'На зиму':'',since:query.has('disabled')?'2026-11-01':null}}};
+      const treatmentSnapshot = {revision:1,settings:{salt:{history:[
+        {action:'regeneration',date:'2026-10-29',water_m3:0.22,result:'confirmed'},
+        {action:'regeneration',date:'2026-11-03',water_m3:0.24,result:'unverified'},
+        {action:'regeneration',date:'2026-11-07',water_m3:0.23,result:'confirmed'},
+      ]}}};
 
       function mockStatistics(message) {
         const step = 3_600_000;
@@ -119,19 +142,37 @@
         return result;
       }
 
+      async function mockWebSocket(message) {
+        (window.previewRequests ||= []).push(structuredClone(message));
+        if (message.type === 'recorder/statistics_during_period') return mockStatistics(message);
+        if (message.type === 'water_treatment/filters' && (message.action || 'get') === 'get') {
+          return structuredClone(treatmentSnapshot);
+        }
+        if (message.type === 'water_accounting/settings') {
+          if ((message.action || 'get') === 'get') return structuredClone(settingsSnapshot);
+          if (query.has('readonly')) throw {code:'unauthorized',message:'Нужны права администратора'};
+          if (message.revision !== settingsSnapshot.revision) throw {code:'revision_conflict',message:'Настройки изменились на другом устройстве'};
+          settingsSnapshot = {revision:settingsSnapshot.revision+1,settings:{...settingsSnapshot.settings,...message.payload}};
+          return structuredClone(settingsSnapshot);
+        }
+        throw {code:'unknown_command',message:'Неизвестная демонстрационная команда'};
+      }
+
       const panel = document.createElement("nikas-water-accounting-panel");
       panel.panel = {
         config: {
           title: "Учёт воды",
-          ui_version: "0.3.0-beta001",
+          ui_version: "0.3.0-beta002",
           parent_route: "/dashboard-house-v13/home",
           entities,
         },
       };
       panel.hass = {
         locale: { language: "ru" },
+        user: {is_admin:!query.has('readonly')},
+        config: {time_zone:'Europe/Moscow'},
         states,
-        callWS: async (message) => mockStatistics(message),
+        callWS: mockWebSocket,
         callService: async () => undefined,
       };
       document.getElementById("root").appendChild(panel);

@@ -6,13 +6,14 @@
   "entry_route": "/dashboard-water",
   "safe_return_route": "/home/overview",
   "visible_entry_owner": "house.resources.water",
-  "read_only": true,
-  "ui_version": "0.3.0-beta001",
+  "read_only": false,
+  "ui_version": "0.3.0-beta002",
   "tabs": [
     "overview",
     "consumption",
+    "statistics",
     "meters",
-    "diagnostics"
+    "settings"
   ],
   "statistics_periods": [
     "24h",
@@ -41,5 +42,6 @@
     "pressure_irrigation": "sensor.nikas_h2000_pro_voda_na_poliv_2",
     "drinking_total": "sensor.schetchik_vody_svd_20_0020989_pokazaniia",
     "irrigation_total": "sensor.schetchik_vody_svd_20_0020988_pokazaniia"
-  }
+  },
+  "writes": "administrator-only accounting settings; no water controls"
 }

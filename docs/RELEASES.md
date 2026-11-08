@@ -3,7 +3,7 @@
 ## Current repository state
 
 - `main` is the canonical source branch, and accepted changes reach it through reviewed pull requests after required checks pass.
-- The integration version is [`0.3.0-beta001`](../custom_components/water_accounting/manifest.json).
+- The proposed integration version is [`0.3.0-beta002`](../custom_components/water_accounting/manifest.json), adding weekly-style statistics and shared irrigation outage settings. Branch verification and target installation are separate from source merge.
 - Live HACS inspection on 2026-10-27 confirmed commit-based delivery from `main`: `version_or_commit=commit`, `ref=main`, no releases. Version 0.2.0-beta003 was merged through PR #14. The split version 0.3.0-beta001 requires its own PR and target HACS/device acceptance. Treatment has a separate repository and installation.
 - End-to-end acceptance that HACS exposes and installs the current `main` state was not performed by that audit. A merged commit is accepted source, not confirmed user delivery, until verification succeeds in the target Home Assistant installation.
 
