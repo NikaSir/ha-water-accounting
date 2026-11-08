@@ -12,6 +12,7 @@ const HOUR = 3600000;
 const NOW = Date.parse('2026-11-09T09:00:00Z');
 const START = Date.parse('2026-09-30T21:00:00Z');
 const END = Date.parse('2026-11-08T21:00:00Z');
+const ENTITY = 'sensor.test_water';
 const settings = {
   statistics_start_date: '2026-11-02', low_day_threshold_l: 100,
   regeneration_verified_from: '2026-10-01', regeneration_verified_through: '2026-11-08',
@@ -24,6 +25,14 @@ const events = [
   {action: 'regeneration', date: '2026-11-04', water_m3: 0.1, result: 'unverified'},
   {action: 'regeneration', date: '2026-11-07', water_m3: 0.2, result: 'failed'},
 ];
+
+function windows(volumes = {'2026-11-04':0.1,'2026-11-07':0.2}) {
+  return {entity_id:ENTITY,window:{start:'02:30',end:'04:30',timezone:'Europe/Moscow'},
+    measurements:Object.fromEntries(Object.entries(volumes).map(([date,water_m3])=>[date,{
+      date,status:'measured',water_m3,start_meter_m3:100,end_meter_m3:100+water_m3,
+      start_time:date+'T02:30:00+03:00',end_time:date+'T04:30:00+03:00',source:'recorder_history',
+    }]))};
+}
 
 function rowsFor(daily = amounts, start = START, end = END) {
   let sum = 1000;
@@ -40,13 +49,15 @@ function rowsFor(daily = amounts, start = START, end = END) {
 function build(overrides = {}) {
   return model.build({now: NOW, settings, rows: rowsFor(),
     treatment: {revision: 8, settings: {salt: {history: events}}},
-    treatmentAvailable: true, unit: 'm³', ...overrides});
+    treatmentAvailable: true, regenerationWindows: windows(), regenerationEntityId:ENTITY,
+    unit: 'm³', ...overrides});
 }
 const close = (actual, expected) => assert.ok(Math.abs(actual-expected)<0.00001, `${actual} != ${expected}`);
 
 test('report model exposes the production entry points', () => {
   assert.equal(typeof model?.periods, 'function');
   assert.equal(typeof model?.build, 'function');
+  assert.equal(typeof model?.regenerationDates, 'function');
 });
 
 test('Moscow boundaries exclude the current local day regardless of browser timezone', () => {
@@ -147,12 +158,16 @@ test('recorded water is usable regardless of the separate softening result', () 
 test('unmeasured regeneration is never replaced with an assumed dose or refill water', () => {
   const treatment = {settings:{salt:{dose:1,history:[{action:'regeneration',date:'2026-11-07',
     estimated_water_m3:0.39,refill_l:5,result:'confirmed'}]}}};
-  const r = build({treatment});
+  const r = build({treatment,regenerationWindows:null});
   assert.equal(r.months[0].gross_m3 !== null, true);
   assert.equal(r.months[0].net_m3, null);
   assert.equal(r.months[0].adjusted_m3, null);
   assert.ok(r.typical.excluded.some(x=>x.date==='2026-11-07'&&x.reason==='regeneration_unknown'));
   assert.equal(r.regenerations.cycles, 0);
+  assert.equal(r.regenerations.volume_m3,null);
+  assert.equal(r.regenerations.known_volume_m3,null);
+  assert.equal(r.regenerations.unknown_cycles,1);
+  assert.equal(r.months[0].regeneration_m3,null);
 });
 
 test('same identified event is deducted once while conflicting same-date entries are ambiguous', () => {
@@ -170,7 +185,7 @@ test('identity conflicts outside the reporting window invalidate the affected co
   for(const otherDate of ['2026-11-09','2026-09-30']) {
     const history=[{id:'same-cycle',action:'regeneration',date:'2026-11-08',water_m3:0.1},
       {id:'same-cycle',action:'regeneration',date:otherDate,water_m3:0.1}];
-    const r=build({treatment:{settings:{salt:{history}}}});
+    const r=build({treatment:{settings:{salt:{history}}},regenerationWindows:windows({'2026-11-08':0.1})});
     close(r.months[0].gross_m3,2.19);
     assert.equal(r.months[0].net_m3,null);
     assert.ok(r.typical.excluded.some(x=>x.date==='2026-11-08'&&x.reason==='regeneration_unknown'));
@@ -178,10 +193,11 @@ test('identity conflicts outside the reporting window invalidate the affected co
   }
 });
 
-test('explicitly estimated volumes are not accepted as measured', () => {
-  const r = build({treatment:{settings:{salt:{history:[{...events[1],water_basis:'estimated'}]}}}});
-  assert.equal(r.regenerations.cycles,0);
-  assert.equal(r.months[0].net_m3,null);
+test('a measured window replaces an old estimated journal volume without relabeling it', () => {
+  const r = build({treatment:{settings:{salt:{history:[{...events[1],water_m3:0.55,water_basis:'estimated'}]}}}});
+  assert.equal(r.regenerations.cycles,1);
+  close(r.regenerations.volume_m3,0.2);
+  close(r.months[0].net_m3,1.99);
 });
 
 test('unverified journal interval gives a labeled residual but no confirmed clean total', () => {
@@ -202,7 +218,8 @@ test('unavailable journal cannot be interpreted as zero regeneration', () => {
 });
 
 test('volume exceeding its full-day total is an error, never a clamped zero', () => {
-  const r = build({treatment:{settings:{salt:{history:[{...events[1],water_m3:1}]}}}});
+  const r = build({treatment:{settings:{salt:{history:[events[1]]}}},
+    regenerationWindows:windows({'2026-11-07':1})});
   assert.equal(r.months[0].net_m3,null);
   assert.ok(r.typical.excluded.some(x=>x.date==='2026-11-07'&&x.reason==='regeneration_exceeds_total'));
 });
@@ -254,4 +271,129 @@ test('first day of month has zero completed current-month days, not a fake zero 
   assert.equal(r.months[0].expected_days,0);
   assert.equal(r.months[0].gross_m3,null);
   assert.equal(r.months[0].gross_lpd,null);
+});
+
+test('regeneration dates are unique, valid, and bounded while including today for a finished-window request', () => {
+  const treatment={settings:{salt:{history:[...events,{...events[0]},
+    {action:'regeneration',date:'2026-11-09'},
+    {action:'regeneration',date:'2026-11-10'},
+    {action:'regeneration',date:'2026-09-30'},
+    {action:'regeneration',date:'2026-02-30'},
+    {action:'check',date:'2026-11-06'}]}}};
+  assert.deepEqual(Array.from(model.regenerationDates(treatment,model.periods(NOW,settings))),
+    ['2026-11-04','2026-11-07','2026-11-09']);
+  assert.deepEqual(Array.from(model.regenerationDates(null,model.periods(NOW,settings))),[]);
+});
+
+test('November 4 remains a calendar holiday with explicit exclusion when its window is unknown', () => {
+  const regenerationWindows=windows({'2026-11-07':0.2});
+  regenerationWindows.measurements['2026-11-04']={date:'2026-11-04',status:'unavailable',reason:'history_missing'};
+  const r=build({regenerationWindows});
+  const holiday=r.typical.groups.holiday;
+  assert.equal(holiday.calendar_days,1);
+  assert.equal(holiday.days,0);
+  assert.equal(holiday.excluded_days,1);
+  assert.deepEqual(Array.from(holiday.dates),['2026-11-04']);
+  assert.deepEqual(Array.from(holiday.included_dates),[]);
+  assert.deepEqual(Array.from(holiday.excluded,x=>({...x})),[{date:'2026-11-04',reason:'regeneration_unknown'}]);
+  assert.equal(holiday.gross_lpd,null);
+  assert.equal(r.regenerations.volume_m3,null);
+  close(r.regenerations.known_volume_m3,0.2);
+  assert.equal(r.regenerations.unknown_cycles,1);
+  assert.equal(r.months[0].regeneration_m3,null);
+  close(r.months[0].known_regeneration_m3,0.2);
+  close(r.months[0].gross_m3,2.19);
+});
+
+test('November 4 enters the holiday mean once its fixed window is measured, even without journal water_m3', () => {
+  const history=events.map(({water_m3,...event})=>event);
+  const r=build({treatment:{settings:{salt:{history}}}});
+  const holiday=r.typical.groups.holiday;
+  assert.equal(holiday.calendar_days,1);
+  assert.equal(holiday.days,1);
+  assert.equal(holiday.excluded_days,0);
+  assert.deepEqual(Array.from(holiday.dates),['2026-11-04']);
+  assert.deepEqual(Array.from(holiday.included_dates),['2026-11-04']);
+  close(holiday.net_lpd,400);
+  close(r.regenerations.volume_m3,0.3);
+  assert.equal(r.regenerations.unknown_cycles,0);
+});
+
+test('old journal water_m3 cannot fill a missing window or replace the chosen measurement', () => {
+  const treatment={settings:{salt:{history:[{...events[0],water_m3:0.45}]}}};
+  const known=build({treatment});
+  close(known.regenerations.volume_m3,0.1);
+  close(known.typical.groups.holiday.net_lpd,400);
+  const missing=build({treatment,regenerationWindows:windows({})});
+  assert.equal(missing.regenerations.cycles,0);
+  assert.equal(missing.regenerations.volume_m3,null);
+  assert.equal(missing.months[0].net_m3,null);
+});
+
+test('a window response is tied to the requested sensor and fixed Moscow interval', () => {
+  const invalid=[
+    r=>{r.entity_id='sensor.other_water';},
+    r=>{delete r.entity_id;},
+    r=>{r.window.start='02:50';},
+    r=>{r.window.end='04:40';},
+    r=>{r.window.timezone='UTC';},
+    r=>{delete r.window;},
+  ];
+  invalid.forEach(alter=>{
+    const regenerationWindows=windows();alter(regenerationWindows);
+    const r=build({regenerationWindows});
+    assert.equal(r.regenerations.cycles,0);
+    assert.equal(r.regenerations.volume_m3,null);
+    assert.equal(r.months[0].net_m3,null);
+  });
+  assert.equal(build({regenerationEntityId:null}).regenerations.cycles,0);
+});
+
+test('partial or contradictory measured window records cannot become zero or an accepted volume', () => {
+  const invalid=[
+    m=>{m.date='2026-11-03';},
+    m=>{m.start_time='2026-11-04T02:30:00Z';},
+    m=>{m.end_time='2026-11-04T04:29:00+03:00';},
+    m=>{m.source='hourly_interpolation';},
+    m=>{m.status='unavailable';m.reason='meter_reset';},
+    m=>{m.water_m3=null;},
+    m=>{m.water_m3=-0.1;},
+    m=>{m.water_m3=0.3;},
+    m=>{m.end_meter_m3=99;},
+    m=>{delete m.start_meter_m3;},
+    m=>{m.start_meter_m3=NaN;},
+  ];
+  invalid.forEach(alter=>{
+    const regenerationWindows=windows();alter(regenerationWindows.measurements['2026-11-04']);
+    const r=build({regenerationWindows});
+    assert.equal(r.typical.groups.holiday.days,0);
+    assert.equal(r.regenerations.cycles,1);
+    assert.equal(r.regenerations.volume_m3,null);
+    close(r.regenerations.known_volume_m3,0.2);
+    assert.equal(r.regenerations.unknown_cycles,1);
+  });
+});
+
+test('window records without a recorded cycle are never deducted', () => {
+  const r=build({treatment:{settings:{salt:{history:[]}}}});
+  assert.equal(r.regenerations.cycles,0);
+  assert.equal(r.regenerations.volume_m3,0);
+  assert.equal(r.regenerations.known_volume_m3,0);
+  assert.equal(r.regenerations.unknown_cycles,0);
+  close(r.months[0].net_m3,2.19);
+});
+
+test('an explicitly unfinished cycle cannot be made complete by a measured window', () => {
+  const r=build({treatment:{settings:{salt:{history:[{...events[0],completed:false}]}}}});
+  assert.equal(r.regenerations.cycles,0);
+  assert.equal(r.regenerations.volume_m3,null);
+  assert.equal(r.typical.groups.holiday.excluded_days,1);
+});
+
+test('malformed cycle dates make totals unknown while preserving separately known measurements', () => {
+  const r=build({treatment:{settings:{salt:{history:[...events,{action:'regeneration',date:'invalid'}]}}}});
+  assert.equal(r.regenerations.volume_m3,null);
+  close(r.regenerations.known_volume_m3,0.3);
+  assert.equal(r.months[0].regeneration_m3,null);
+  assert.equal(r.months[0].net_m3,null);
 });

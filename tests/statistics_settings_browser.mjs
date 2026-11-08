@@ -49,6 +49,10 @@ try {
   assert.equal(reportRequests.at(-1).units.volume,'m³');
   assert.equal(reportRequests.at(-1).end_time,'2026-11-07T21:00:00.000Z');
   assert.ok((await by('.page-statistics').innerText()).includes('Europe/Moscow'));
+  await by('[data-calendar-group="holiday"]').waitFor({state:'visible'});
+  assert.match(await by('[data-calendar-group="holiday"]').innerText(),/Учтено: 1 из 1/);
+  assert.match(await by('[data-calendar-group="holiday"]').innerText(),/04\.11\.2026/);
+  assert.match(await by('.page-statistics').innerText(),/02:30–04:30/);
 
   for(const size of [{width:390,height:844},{width:430,height:932},{width:932,height:430},{width:768,height:1024},{width:1440,height:900}]) {
     await page.setViewportSize(size);
@@ -81,6 +85,14 @@ try {
   await page.evaluate(()=>document.querySelector('nikas-water-accounting-panel').shadowRoot.querySelector('.canvas-viewport').scrollTop=0);
   await page.screenshot({path:resolve(output,'settings-mobile.png')});
 
+  // Even without a measured window, the holiday remains visible with its exclusion reason.
+  await page.goto(origin+'/preview/index.html?view=statistics&missing-window=1');
+  await by('[data-calendar-group="holiday"]').waitFor({state:'visible'});
+  assert.match(await by('[data-calendar-group="holiday"]').innerText(),/Учтено: 0 из 1/);
+  assert.match(await by('[data-calendar-group="holiday"]').innerText(),/04\.11\.2026: неизвестен объём регенерац/);
+  await by('[data-calendar-group="holiday"]').scrollIntoViewIfNeeded();
+  await page.screenshot({path:resolve(output,'holiday-missing-window-mobile.png')});
+
   // A deliberate outage must be neutral, while drinking-water faults remain faults.
   await page.goto(origin+'/preview/index.html?view=overview&disabled=1');
   await by('.page-overview').waitFor({state:'visible'});
@@ -89,6 +101,15 @@ try {
   assert.ok(!['bad','warn','unknown'].includes(off.tone),JSON.stringify(off));
   assert.match(await by('[data-pressure-status="irrigation"]').innerText(),/отключ/i);
   assert.doesNotMatch(await by('[data-overall-title]').innerText(),/внимание|не все|отклонение/i);
+  await page.evaluate(()=>{
+    const panel=document.querySelector('nikas-water-accounting-panel');
+    const id=panel._config().entities.pressure_drinking;
+    panel.hass={...panel.hass,states:{...panel.hass.states,[id]:{...panel.hass.states[id],state:'2.0'}}};
+  });
+  await tick();
+  assert.equal(await page.evaluate(()=>panel._pressureEvaluation('drinking').tone),'warn');
+  assert.equal(await page.evaluate(()=>panel._pressureEvaluation('irrigation').tone),'inactive');
+  assert.match(await by('[data-overall-title]').innerText(),/отклонение/i);
   await page.evaluate(()=>{
     const panel=document.querySelector('nikas-water-accounting-panel');
     const id=panel._config().entities.pressure_drinking;
@@ -119,7 +140,7 @@ try {
   await page.goto(origin+'/preview/index.html?view=settings');
   await by('#irrigation-enabled').waitFor({state:'visible'});
   await page.waitForFunction(()=>document.querySelector('nikas-water-accounting-panel')._settingsTrusted);
-  await by('#irrigation-enabled').uncheck();
+  await by('#irrigation-enabled').selectOption('false');
   await by('#irrigation-reason').fill('На зиму');
   await by('#irrigation-since').fill('2026-11-01');
   assert.equal(await page.evaluate(()=>panel._irrigationInactive()),false,'An unsaved draft must not mask faults');
@@ -129,10 +150,11 @@ try {
     panel.hass={...panel.hass,callWS:message=>message.type==='water_accounting/settings'&&message.action==='update'
       ? new Promise((resolve,reject)=>{window.pendingSettingsSave={message,resolve,reject};}) : original(message)};
   });
-  await by('[data-settings-save]').click();
+  assert.match(await by('[data-irrigation-draft]').innerText(),/после сохранения/);
+  await by('[data-settings-save]').first().click();
   await page.waitForFunction(()=>window.pendingSettingsSave&&panel._settingsSaving);
   await tick();
-  assert.equal(await by('[data-settings-save]').isDisabled(),true);
+  assert.deepEqual(await by('[data-settings-save]').evaluateAll(nodes=>nodes.map(node=>node.disabled)),[true,true]);
   assert.equal(await page.evaluate(()=>panel._irrigationInactive()),false);
   await page.evaluate(async()=>{
     pendingSettingsSave.resolve(await originalPreviewWS(pendingSettingsSave.message));
@@ -141,6 +163,10 @@ try {
   await page.waitForFunction(()=>panel._irrigationInactive());
   await tick();
   assert.match(await by('[data-settings-status]').innerText(),/сохранены/);
+
+  await by('#irrigation-reason').fill('На зиму, до весны');
+  assert.match(await by('[data-irrigation-draft]').innerText(),/Текущее состояние линии продолжает действовать/);
+  assert.equal(await page.evaluate(()=>panel._irrigationInactive()),true);
 
   // Telemetry and an explicit refresh preserve an edited field and its base revision.
   await by('#stat-low').fill('135');
@@ -155,12 +181,12 @@ try {
   await by('#refresh').click();
   await page.waitForFunction(()=>!panel._refreshing);
   assert.equal(await by('#stat-low').inputValue(),'135');
-  await by('[data-settings-save]').click();
+  await by('[data-settings-save]').last().click();
   await page.waitForFunction(()=>panel._settingsConflict&&!panel._settingsSaving);
   await tick();
   assert.equal(await by('#stat-low').inputValue(),'135');
   assert.match(await by('[data-settings-status]').innerText(),/другом окне/);
-  assert.equal(await by('[data-settings-save]').isDisabled(),true);
+  assert.equal(await by('[data-settings-save]').first().isDisabled(),true);
   await by('[data-settings-action="reload"]').click();
   await page.waitForFunction(()=>!panel._settingsConflict&&!panel._settingsPromise);
   await tick();
@@ -171,8 +197,8 @@ try {
     const id=panel._config().entities.pressure_irrigation;
     panel.hass={...panel.hass,states:{...panel.hass.states,[id]:{...panel.hass.states[id],state:'0'}}};
   });
-  await by('#irrigation-enabled').check();
-  await by('[data-settings-save]').click();
+  await by('#irrigation-enabled').selectOption('true');
+  await by('[data-settings-save]').first().click();
   await page.waitForFunction(()=>!panel._settingsSaving&&!panel._settingsDirty);
   assert.equal(await page.evaluate(()=>panel._pressureEvaluation('irrigation').tone),'bad');
 
@@ -195,11 +221,11 @@ try {
   await page.goto(origin+'/preview/index.html?view=settings&readonly=1');
   await page.waitForFunction(()=>panel._settingsTrusted);
   assert.equal(await by('#irrigation-enabled').isDisabled(),true);
-  assert.equal(await by('[data-settings-save]').isDisabled(),true);
+  assert.equal(await by('[data-settings-save]').first().isDisabled(),true);
   assert.match(await by('[data-settings-status]').innerText(),/администратора/);
   assert.equal(await page.evaluate(()=>previewRequests.filter(r=>r.type==='water_accounting/settings'&&r.action==='update').length),0);
   assert.deepEqual(errors,[]);
-  console.log('Browser acceptance passed: 25 viewport/tab combinations, Moscow boundaries, outages, drinking faults, stable nodes, delayed save, dirty focus, refresh, revision conflict, reload, re-enable, failed reads and read-only access.');
+  console.log('Browser acceptance passed: 25 viewport/tab combinations, exact regeneration windows, visible November 4 and exclusion reasons, outages, drinking 2.0 warning, stable nodes, delayed save, dirty focus, refresh, revision conflict, reload, re-enable, failed reads and read-only access.');
 } finally {
   if(browser)await browser.close();
   await new Promise(done=>server.close(done));

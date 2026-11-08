@@ -120,9 +120,9 @@
         regeneration_verified_through:'2026-11-07',irrigation:{enabled:!query.has('disabled'),
           reason:query.has('disabled')?'На зиму':'',since:query.has('disabled')?'2026-11-01':null}}};
       const treatmentSnapshot = {revision:1,settings:{salt:{history:[
-        {action:'regeneration',date:'2026-10-29',water_m3:0.22,result:'confirmed'},
-        {action:'regeneration',date:'2026-11-03',water_m3:0.24,result:'unverified'},
-        {action:'regeneration',date:'2026-11-07',water_m3:0.23,result:'confirmed'},
+        {action:'regeneration',date:'2026-10-29',result:'confirmed'},
+        {action:'regeneration',date:'2026-11-04',result:'unverified'},
+        {action:'regeneration',date:'2026-11-07',result:'confirmed'},
       ]}}};
 
       function mockStatistics(message) {
@@ -148,6 +148,15 @@
         if (message.type === 'water_treatment/filters' && (message.action || 'get') === 'get') {
           return structuredClone(treatmentSnapshot);
         }
+        if (message.type === 'water_accounting/regeneration_windows') {
+          if (query.has('missing-window')) throw {code:'recorder_unavailable'};
+          return {entity_id:message.entity_id,window:{start:'02:30',end:'04:30',timezone:'Europe/Moscow'},
+            measurements:Object.fromEntries(message.dates.map((date,index)=>{
+              const volume=[0.22,0.24,0.23][index%3];
+              return [date,{date,status:'measured',water_m3:volume,start_meter_m3:100,end_meter_m3:100+volume,
+                start_time:date+'T02:30:00+03:00',end_time:date+'T04:30:00+03:00',source:'recorder_history'}];
+            }))};
+        }
         if (message.type === 'water_accounting/settings') {
           if ((message.action || 'get') === 'get') return structuredClone(settingsSnapshot);
           if (query.has('readonly')) throw {code:'unauthorized',message:'Нужны права администратора'};
@@ -162,7 +171,7 @@
       panel.panel = {
         config: {
           title: "Учёт воды",
-          ui_version: "0.3.0-beta002",
+          ui_version: "0.3.0-beta003",
           parent_route: "/dashboard-house-v13/home",
           entities,
         },

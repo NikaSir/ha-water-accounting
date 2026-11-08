@@ -3,6 +3,7 @@ const WaterReportModel = (() => {
   const HOUR = 3600000;
   const DAY = 24 * HOUR;
   const ZONE = 'Europe/Moscow';
+  const REGENERATION_WINDOW = Object.freeze({start:'02:30',end:'04:30',timezone:ZONE});
   const HOLIDAYS = new Set(['01-01','01-02','01-03','01-04','01-05','01-06','01-07','01-08',
     '02-23','03-08','05-01','05-09','06-12','11-04']);
   // National five-day production calendars. Sources and scope: docs/WATER_STATISTICS.md.
@@ -113,7 +114,39 @@ const WaterReportModel = (() => {
     return {days,unitValid:factor!==null};
   }
 
-  function journal(treatment, available, period) {
+  function regenerationDates(treatment, period) {
+    const history=treatment?.settings?.salt?.history;
+    if(!Array.isArray(history) || !period || finite(period.requestStart)===null || !validDate(period.today))return [];
+    return [...new Set(history.filter(event=>event && event.action==='regeneration'
+      && validDate(event.date) && midnight(event.date)>=period.requestStart && event.date<=period.today)
+      .map(event=>event.date))].sort();
+  }
+
+  function windowMeasurement(date, windows, entityId) {
+    const start=date+'T02:30:00+03:00',end=date+'T04:30:00+03:00';
+    const record={date,volume_m3:null,status:'missing_volume',reason:'window_unavailable',
+      source:'Recorder · окно 02:30–04:30 Europe/Moscow',start_time:start,end_time:end,
+      start_meter_m3:null,end_meter_m3:null};
+    if(!windows)return record;
+    if(typeof entityId!=='string' || !entityId || windows.entity_id!==entityId
+      || windows.window?.start!==REGENERATION_WINDOW.start || windows.window?.end!==REGENERATION_WINDOW.end
+      || windows.window?.timezone!==ZONE)return {...record,reason:'invalid_window'};
+    const raw=windows.measurements && Object.prototype.hasOwnProperty.call(windows.measurements,date)
+      ? windows.measurements[date]:null;
+    if(!raw || typeof raw!=='object')return record;
+    if(raw.date!==date)return {...record,reason:'invalid_window'};
+    if(raw.status!=='measured')return {...record,reason:typeof raw.reason==='string'?raw.reason:'window_unavailable'};
+    const value=finite(raw.water_m3),before=finite(raw.start_meter_m3),after=finite(raw.end_meter_m3);
+    if(value===null || value<0 || before===null || before<0 || after===null || after<before
+      || Math.abs(after-before-value)>Math.max(1e-7,value*1e-6)
+      || raw.source!=='recorder_history' || typeof raw.start_time!=='string' || typeof raw.end_time!=='string'
+      || Date.parse(raw.start_time)!==Date.parse(start) || Date.parse(raw.end_time)!==Date.parse(end)) {
+      return {...record,reason:'invalid_window'};
+    }
+    return {...record,volume_m3:value,status:'measured',reason:null,start_meter_m3:before,end_meter_m3:after};
+  }
+
+  function journal(treatment, available, period, windows, entityId) {
     const history=treatment && treatment.settings && treatment.settings.salt && treatment.settings.salt.history;
     const ready=available===true && Array.isArray(history);
     const byDate=new Map(), identities=new Map(), conflictDates=new Set(), issues=[];
@@ -123,18 +156,19 @@ const WaterReportModel = (() => {
       const date=event.date;
       if (!validDate(date)) { malformed=true;issues.push('В журнале есть цикл с неверной датой.');return; }
       const at=midnight(date);
-      const value=finite(event.water_m3);
-      const measured=value!==null && value>=0 && value<=10 && event.completed!==false
-        && event.water_basis!=='estimated' && event.water_basis!=='assumed' && event.estimated!==true;
       const id=typeof event.id==='string' && event.id ? event.id
         : typeof event.operation_id==='string' && event.operation_id ? event.operation_id : null;
-      const record={date,volume_m3:measured ? value:null,status:measured?'measured':'missing_volume',
-        source:'Водоподготовка · журнал измеренных циклов'};
+      // The journal supplies dates, not this window's volume. In particular its
+      // legacy water_m3 may describe another interval and is never a fallback.
+      let record=windowMeasurement(date,windows,entityId);
+      if(event.completed===false)record={...record,volume_m3:null,status:'missing_volume',reason:'cycle_incomplete',
+        start_meter_m3:null,end_meter_m3:null};
+      const identity={date,completed:event.completed!==false};
       if (id && identities.has(id)) {
         const old=identities.get(id);
-        if (old.date===date && old.volume_m3===record.volume_m3 && old.status===record.status) return;
+        if (old.date===date && old.completed===identity.completed) return;
         conflictDates.add(old.date);conflictDates.add(date);
-      } else if (id) identities.set(id,record);
+      } else if (id) identities.set(id,identity);
       // An ID conflict beyond the displayed window can still make an in-window
       // cycle ambiguous. Validate identities against the whole journal first.
       if (at<period.requestStart || at>=period.requestEnd) return;
@@ -144,11 +178,14 @@ const WaterReportModel = (() => {
     const records=[];
     byDate.forEach((items,date)=> {
       if(items.length>1 || conflictDates.has(date)) {
-        byDate.set(date,{date,volume_m3:null,status:'ambiguous',source:'Водоподготовка · неоднозначные записи'});
+        byDate.set(date,{...windowMeasurement(date,null,entityId),status:'ambiguous',reason:'ambiguous_cycle',
+          source:'Водоподготовка · неоднозначные записи'});
         issues.push('Несколько неоднозначных записей регенерации за '+date+'.');
       } else {
         byDate.set(date,items[0]);
-        if(items[0].volume_m3===null)issues.push('Не указан измеренный объём регенерации за '+date+'.');
+        if(items[0].volume_m3===null)issues.push(items[0].reason==='cycle_incomplete'
+          ? 'Запись регенерации за '+date+' отмечена как незавершённая.'
+          : 'Нет подтверждённого расхода в окне 02:30–04:30 за '+date+'.');
       }
       records.push(byDate.get(date));
     });
@@ -193,14 +230,28 @@ const WaterReportModel = (() => {
       if(reason)excluded.push({date:day.date,reason});
       else included.push(day);
     });
-    const kinds={all:included,workday:included.filter(d=>d.kind==='workday'&&d.calendar_known),
-      weekend:included.filter(d=>d.kind==='weekend'&&d.calendar_known),
-      holiday:included.filter(d=>d.kind==='holiday'&&d.calendar_known),
-      nonworking:included.filter(d=>['weekend','holiday'].includes(d.kind)&&d.calendar_known)};
-    const groups=Object.fromEntries(Object.entries(kinds).map(([key,rows])=>[key,group(rows)]));
+    const kinds={all:()=>true,workday:d=>d.kind==='workday'&&d.calendar_known,
+      weekend:d=>d.kind==='weekend'&&d.calendar_known,holiday:d=>d.kind==='holiday'&&d.calendar_known,
+      nonworking:d=>['weekend','holiday'].includes(d.kind)&&d.calendar_known};
+    const groups=Object.fromEntries(Object.entries(kinds).map(([key,matches])=> {
+      const rows=included.filter(matches),calendar=population.filter(matches);
+      const dates=calendar.map(d=>d.date),dateSet=new Set(dates);
+      const omitted=excluded.filter(d=>dateSet.has(d.date));
+      return [key,{...group(rows),calendar_days:calendar.length,excluded_days:omitted.length,
+        dates,included_dates:rows.map(d=>d.date),excluded:omitted}];
+    }));
     return {start,end:addDays(endExclusive,-1),calendar_days:population.length,included_days:included.length,
       excluded_days:excluded.length,excluded,groups,calendar_unknown_days:included.filter(d=>!d.calendar_known).length,
       threshold_l:threshold,net_verified:included.length>0&&included.every(d=>d.net_verified)};
+  }
+
+  function regenerationTotals(records, source) {
+    const measured=records.filter(e=>e.volume_m3!==null);
+    const unknown=records.length-measured.length;
+    const sum=measured.reduce((s,e)=>s+e.volume_m3,0);
+    const complete=source.available && !source.malformed && unknown===0;
+    return {volume_m3:complete?sum:null,known_volume_m3:source.available && (measured.length>0 || complete)?sum:null,
+      cycles:measured.length,unknown_cycles:unknown};
   }
 
   function month(days,key,start,endExclusive,source) {
@@ -213,22 +264,23 @@ const WaterReportModel = (() => {
     const knownGross=known.length?known.reduce((s,d)=>s+d.known_gross_m3,0):null;
     const gross=complete?rows.reduce((s,d)=>s+d.gross_m3,0):null;
     const adjusted=adjustedComplete?rows.reduce((s,d)=>s+d.adjusted_m3,0):null;
-    const measured=source.records.filter(e=>e.date>=start&&e.date<endExclusive&&e.volume_m3!==null);
+    const regeneration=regenerationTotals(source.records.filter(e=>e.date>=start&&e.date<endExclusive),source);
     return {key,start,end:addDays(endExclusive,-1),expected_days:expected,
       complete_days:rows.filter(d=>d.gross_m3!==null).length,missing_dates:rows.filter(d=>d.gross_m3===null).map(d=>d.date),
       status:complete?'complete':known.length?'partial':'empty',gross_m3:gross,known_gross_m3:knownGross,
       adjusted_m3:adjusted,net_m3:netComplete?adjusted:null,gross_lpd:gross===null?null:gross*1000/expected,
       adjusted_lpd:adjusted===null?null:adjusted*1000/expected,net_lpd:netComplete?adjusted*1000/expected:null,
-      regeneration_m3:source.available?measured.reduce((s,e)=>s+e.volume_m3,0):null,cycles:measured.length,
-      unknown_cycles:source.records.filter(e=>e.date>=start&&e.date<endExclusive&&e.volume_m3===null).length};
+      regeneration_m3:regeneration.volume_m3,known_regeneration_m3:regeneration.known_volume_m3,
+      cycles:regeneration.cycles,unknown_cycles:regeneration.unknown_cycles};
   }
 
-  function build({now,settings={},rows,treatment,treatmentAvailable=false,unit}) {
+  function build({now,settings={},rows,treatment,treatmentAvailable=false,
+    regenerationWindows=null,regenerationEntityId=null,unit}) {
     const period=periods(now,settings);
     const value=finite(settings.low_day_threshold_l);
     const threshold=value!==null && value>=0 && value<=10000?value:100;
     const grid=hourGrid(rows,period,unit);
-    const source=journal(treatment,treatmentAvailable,period);
+    const source=journal(treatment,treatmentAvailable,period,regenerationWindows,regenerationEntityId);
     const days=applyRegenerations(grid.days,source,settings);
     const current=typical(days,period.start,period.today,threshold);
     const months=[month(days,'current',period.currentMonthStart,period.today,source),
@@ -246,14 +298,13 @@ const WaterReportModel = (() => {
       ?current.groups.all[key]-previous.groups.all[key]:null;
     const previousAvailable=!!previous&&previous.included_days>0&&current.included_days>0;
     const events=source.records.filter(e=>e.date>=period.start&&e.date<period.today);
-    const measured=events.filter(e=>e.volume_m3!==null);
     return {timezone:ZONE,generated_at:new Date(now).toISOString(),periods:period,typical:current,months,
-      regenerations:{events,volume_m3:source.available?measured.reduce((s,e)=>s+e.volume_m3,0):null,
-        cycles:measured.length,issues:source.issues,available:source.available,revision:treatment?.revision??null},
+      regenerations:{events,...regenerationTotals(events,source),window:REGENERATION_WINDOW,
+        issues:source.issues,available:source.available,revision:treatment?.revision??null},
       comparison:{available:previousAvailable,as_of:period.previousReportEnd,kind:'reconstructed',
         previous:previousAvailable?previous:null,delta_all:{gross_lpd:delta('gross_lpd'),adjusted_lpd:delta('adjusted_lpd'),net_lpd:delta('net_lpd')}},
       warnings};
   }
 
-  return Object.freeze({periods,build,classifyDate});
+  return Object.freeze({periods,build,classifyDate,regenerationDates});
 })();

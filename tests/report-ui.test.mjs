@@ -203,3 +203,61 @@ test('report requests explicit volume units and Moscow full days; journal failur
   assert.ok(Math.abs(load.result.months[0].gross_m3 - 1.68) < 1e-9);
   assert.match(panel._reportMarkup(load.result), /Чистый расход не установлен/);
 });
+
+function reportFixture({windowError = false} = {}) {
+  const calls = [];
+  const panel = make(message => {
+    calls.push(message);
+    if (message.type === 'water_accounting/settings') return Promise.resolve(initial());
+    if (message.type === 'water_treatment/filters') return Promise.resolve({revision: 7, settings: {salt: {history: [
+      {action: 'regeneration', date: '2026-11-04', water_m3: 0.99},
+      {action: 'regeneration', date: '2026-11-08'},
+    ]}}});
+    if (message.type === 'water_accounting/regeneration_windows') {
+      if (windowError) return Promise.reject({code: 'unknown_command'});
+      return Promise.resolve({entity_id: message.entity_id,
+        window: {start: '02:30', end: '04:30', timezone: 'Europe/Moscow'},
+        measurements: Object.fromEntries(message.dates.map(date => [date, {date, status: 'measured',
+          water_m3: 0.3, start_meter_m3: 100, end_meter_m3: 100.3,
+          start_time: date + 'T02:30:00+03:00', end_time: date + 'T04:30:00+03:00', source: 'recorder_history'}]))});
+    }
+    const start = Date.parse(message.start_time), end = Date.parse(message.end_time);
+    let sum = 100;
+    return Promise.resolve({[message.statistic_ids[0]]: Array.from({length: (end-start)/3600000}, (_, index) => {
+      sum += 0.02;
+      return {start: start+index*3600000, change: 0.02, sum};
+    })});
+  });
+  return {panel, calls};
+}
+
+test('report loads recorded date windows and includes November 4 as a holiday', async () => {
+  const {panel, calls} = reportFixture();
+  const load = await panel._loadWaterReport();
+  assert.equal(load.status, 'complete');
+  const request = calls.find(item => item.type === 'water_accounting/regeneration_windows');
+  assert.ok(request, 'Recorded cycles need the exact regeneration window endpoint');
+  assert.deepEqual(copy(request.dates), ['2026-11-04', '2026-11-08']);
+  assert.equal(request.entity_id, panel._config().entities.drinking_total);
+  assert.equal(load.result.typical.groups.holiday.calendar_days, 1);
+  assert.equal(load.result.typical.groups.holiday.days, 1);
+  assert.ok(Math.abs(load.result.typical.groups.holiday.adjusted_lpd - 180) < 1e-7);
+  assert.ok(Math.abs(load.result.regenerations.volume_m3 - 0.3) < 1e-9, 'Journal manual value must not replace the new window');
+  assert.match(panel._reportMarkup(load.result), /02:30–04:30/);
+  assert.match(panel._reportMarkup(load.result), /04\.11\.2026/);
+});
+
+test('missing window API leaves gross report usable and explains the excluded holiday', async () => {
+  const {panel} = reportFixture({windowError: true});
+  const load = await panel._loadWaterReport();
+  assert.equal(load.status, 'complete');
+  assert.equal(load.result.typical.groups.holiday.calendar_days, 1);
+  assert.equal(load.result.typical.groups.holiday.days, 0);
+  assert.equal(load.result.regenerations.volume_m3, null);
+  assert.equal(load.result.regenerations.unknown_cycles, 1);
+  assert.ok(Math.abs(load.result.months[0].gross_m3 - 3.36) < 1e-8);
+  const html = panel._reportMarkup(load.result);
+  assert.match(html, /Учтено: 0 из 1/);
+  assert.match(html, /04\.11\.2026: неизвестен объём регенерац/);
+  assert.match(html, /Без подтверждённого объёма: 1/);
+});
