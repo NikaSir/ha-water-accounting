@@ -131,7 +131,7 @@ const WaterReportUI = {
       const path = node.dataset.setting.split('.');
       const target = path.length === 2 ? this._settingsDraft[path[0]] : this._settingsDraft;
       const key = path[path.length - 1];
-      target[key] = node.type === 'checkbox' ? node.checked : node.type === 'number'
+      target[key] = node.dataset.valueType === 'boolean' ? node.value === 'true' : node.type === 'number'
         ? (node.value === '' ? null : Number(node.value)) : (node.value || (node.type === 'date' ? null : ''));
       this._settingsDirty = true;
       this._settingsNotice = '';
@@ -207,19 +207,22 @@ const WaterReportUI = {
       + '<p class="account-notice" data-settings-status role="status" aria-live="polite">Загрузка настроек…</p>'
       + '<form class="account-settings-form">'
       + '<article class="card settings-card"><h2>Линия полива</h2><p data-irrigation-saved></p>'
-      + '<label class="setting-switch"><input id="irrigation-enabled" type="checkbox" data-setting="irrigation.enabled">'
-      + '<span>Линия полива включена</span></label>'
-      + '<p class="field-help">Если линия отключена на зиму, для обслуживания или по другой причине, снимите отметку. Её давление и недоступность датчиков не будут считаться проблемой.</p>'
+      + '<label class="setting-state">Состояние линии<select id="irrigation-enabled" data-setting="irrigation.enabled" data-value-type="boolean">'
+      + '<option value="true">Включена</option><option value="false">Отключена</option></select></label>'
+      + '<p class="field-help">При отключении заполните причину и дату. Изменение применяется после сохранения.</p>'
       + '<div class="settings-grid"><label>Причина отключения<input id="irrigation-reason" type="text" maxlength="500" list="irrigation-reasons" data-setting="irrigation.reason" placeholder="Например, на зиму"></label>'
       + '<label>Отключена с<input id="irrigation-since" type="date" min="2015-01-01" data-setting="irrigation.since"></label></div>'
       + '<datalist id="irrigation-reasons"><option value="На зиму"></option><option value="Обслуживание"></option><option value="Ремонт"></option></datalist>'
-      + '<p class="field-help">Это отметка состояния. Она не управляет краном и не изменяет историю расхода. После включения обычные проверки возобновятся.</p></article>'
+      + '<p class="account-notice irrigation-draft" data-irrigation-draft role="status" aria-live="polite" hidden></p>'
+      + '<div class="settings-actions irrigation-actions"><button class="account-button primary" type="submit" data-settings-save>Сохранить</button></div>'
+      + '<p class="field-help">У отключённой линии давление и недоступность датчиков не считаются проблемой. После включения обычные проверки возобновятся. Отметка не управляет краном и не изменяет историю расхода.</p></article>'
       + '<article class="card settings-card"><h2>Статистика питьевой воды</h2><div class="settings-grid">'
       + '<label>Начало накопительной выборки<input id="stat-start" type="date" min="2015-01-01" required data-setting="statistics_start_date"></label>'
       + '<label>Порог низкого расхода, л/сут<input id="stat-low" type="number" min="0" max="10000" step="any" required data-setting="low_day_threshold_l"></label></div>'
-      + '<p class="field-help">Предварительный порог — 100 л/сут. Нулевые дни и дни ниже порога после вычета учтённых регенераций исключаются из характерного среднего. Месячный расход включает все дни.</p>'
+      + '<p class="field-help">Нулевые дни и дни ниже указанного порога после вычета учтённых регенераций исключаются из характерного среднего. Месячный расход включает все дни.</p>'
+      + '<p class="field-help">Расход регенерации — потребление с 02:30 до 04:30 по Москве в дату записанного цикла. Показания берутся из истории питьевого счётчика.</p>'
       + '<details class="verification-settings"><summary>Подтверждение журнала регенераций</summary>'
-      + '<p class="field-help">Укажите период, только если проверены все циклы и их измеренные объёмы в «Водоподготовке». За его пределами результат подписан «По учтённым циклам», а не «Чистый расход».</p>'
+      + '<p class="field-help">Укажите период, только если проверено, что в журнале «Водоподготовки» записаны все циклы. Объёмы рассчитываются за 02:30–04:30 по Москве. За пределами проверенного периода результат подписан «По учтённым циклам».</p>'
       + '<div class="settings-grid"><label>Проверено с<input id="regen-verified-from" type="date" min="2015-01-01" data-setting="regeneration_verified_from"></label>'
       + '<label>Проверено по<input id="regen-verified-through" type="date" min="2015-01-01" data-setting="regeneration_verified_through"></label></div></details></article>'
       + '<div class="settings-actions"><button class="account-button primary" type="submit" data-settings-save>Сохранить</button>'
@@ -236,23 +239,33 @@ const WaterReportUI = {
       : this._settingsDirty ? 'Есть несохранённые изменения.' : 'Настройки загружены.');
     this._setText('[data-settings-status]', status, root);
     this._setText('[data-irrigation-saved]', this._settingsTrusted
-      ? (this._irrigationInactive() ? this._irrigationNote() : 'Сохранённое состояние: включена. Давление и датчики проверяются.')
+      ? (this._irrigationInactive() ? 'Сохранено. ' + this._irrigationNote() : 'Сохранённое состояние: включена. Давление и датчики проверяются.')
       : 'Сохранённое состояние не подтверждено. Обычные проверки действуют.', root);
+    const irrigationDraft = root.querySelector('[data-irrigation-draft]');
+    if (irrigationDraft) {
+      const changed = this._settingsDirty && JSON.stringify(this._settingsDraft?.irrigation)
+        !== JSON.stringify(this._accountSettings?.settings.irrigation);
+      irrigationDraft.hidden = !changed;
+      irrigationDraft.textContent = this._settingsSaving ? 'Сохраняется выбранное состояние…'
+        : this._settingsDraft?.irrigation.enabled === this._accountSettings?.settings.irrigation.enabled
+          ? 'Изменения причины и даты ещё не сохранены. Текущее состояние линии продолжает действовать.'
+          : this._settingsDraft?.irrigation.enabled === false
+            ? 'Выбрано отключение. Оно начнёт действовать после сохранения.'
+            : 'Выбрано включение. Обычные проверки возобновятся после сохранения.';
+    }
     root.querySelectorAll('[data-setting]').forEach(node => {
       const path = node.dataset.setting.split('.');
       const value = path.reduce((item, key) => item?.[key], this._settingsDraft);
       const isReason = path[0] === 'irrigation' && path[1] !== 'enabled';
       node.disabled = !editable || (isReason && this._settingsDraft?.irrigation.enabled !== false);
-      if (node.type === 'checkbox') node.checked = value === true;
-      else if (this.shadowRoot.activeElement !== node && node.value !== String(value ?? '')) node.value = value ?? '';
+      if (this.shadowRoot.activeElement !== node && node.value !== String(value ?? '')) node.value = String(value ?? '');
       if (node.type === 'date') node.max = WaterReportModel.periods(Date.now()).today;
       if (isReason) node.required = this._settingsDraft?.irrigation.enabled === false;
     });
-    const save = root.querySelector('[data-settings-save]');
-    if (save) {
+    root.querySelectorAll('[data-settings-save]').forEach(save => {
       save.disabled = !editable || !this._settingsDirty || this._settingsConflict;
       save.textContent = this._settingsSaving ? 'Сохранение…' : 'Сохранить';
-    }
+    });
     const reload = root.querySelector('[data-settings-action="reload"]');
     if (reload) reload.disabled = this._settingsSaving || !!this._settingsPromise;
   },
@@ -267,6 +280,30 @@ const WaterReportUI = {
   _reportKey(settings) {
     const {irrigation, ...parameters} = settings;
     return JSON.stringify([this._config().entities.drinking_total, WaterReportModel.periods(Date.now(), settings).today, parameters]);
+  },
+
+  async _loadRegenerationWindows(treatment, period, entity) {
+    const dates = WaterReportModel.regenerationDates(treatment, period);
+    const window = {start: '02:30', end: '04:30', timezone: 'Europe/Moscow'};
+    const result = {entity_id: entity, window, measurements: {}};
+    const tasks = [];
+    for (let index = 0; index < dates.length; index += 366) {
+      const batch = dates.slice(index, index + 366);
+      tasks.push(this._statsPool.run(async () => {
+        const response = await this._withTimeout(this._hass.callWS({type: 'water_accounting/regeneration_windows',
+          entity_id: entity, dates: batch}), 60000);
+        // Do not relabel a response from another meter/window as the requested measurement.
+        if (response?.entity_id !== entity || response.window?.start !== window.start
+          || response.window?.end !== window.end || response.window?.timezone !== window.timezone
+          || !response.measurements || typeof response.measurements !== 'object' || Array.isArray(response.measurements)) return;
+        batch.forEach(date => {
+          if (Object.prototype.hasOwnProperty.call(response.measurements, date)) result.measurements[date] = response.measurements[date];
+        });
+      }));
+    }
+    // A missing window leaves that cycle unknown; it must not discard valid gross totals.
+    await Promise.allSettled(tasks);
+    return result;
   },
 
   async _loadWaterReport(force = false) {
@@ -299,8 +336,11 @@ const WaterReportUI = {
         if (token !== this._reportToken) return null;
         if (results[0].status !== 'fulfilled' || !Array.isArray(results[0].value?.[entity])) throw new Error('Recorder недоступен или не вернул статистику счётчика.');
         const journal = results[1];
+        const treatment = journal.status === 'fulfilled' ? journal.value : null;
+        const regenerationWindows = await this._loadRegenerationWindows(treatment, period, entity);
+        if (token !== this._reportToken) return null;
         load.result = WaterReportModel.build({now, settings: settings.settings, rows: results[0].value[entity],
-          treatment: journal.status === 'fulfilled' ? journal.value : null, treatmentAvailable: journal.status === 'fulfilled', unit: 'm³'});
+          treatment, treatmentAvailable: journal.status === 'fulfilled', regenerationWindows, regenerationEntityId: entity, unit: 'm³'});
         load.status = 'complete';
         load.loadedAt = Date.now();
         return load;
@@ -328,6 +368,8 @@ const WaterReportUI = {
 
   _reportMarkup(report) {
     const typical = report.typical, all = typical.groups.all;
+    const reasons = {missing_data: 'неполная история счётчика', regeneration_unknown: 'неизвестен объём регенераций',
+      regeneration_exceeds_total: 'регенерация превышает суточный расход', low_consumption: 'нулевой расход или ниже порога'};
     const netLabel = typical.net_verified ? 'Чистый расход' : 'По учтённым циклам';
     const range = this._reportDate(typical.start) + ' — ' + this._reportDate(typical.end);
     let html = '<article class="card report-summary"><p class="eyebrow">Характерный среднесуточный расход</p>'
@@ -342,7 +384,13 @@ const WaterReportUI = {
     [['workday', 'Рабочие дни'], ['weekend', 'Выходные дни'], ['holiday', 'Праздничные дни'], ['nonworking', 'Все нерабочие дни']].forEach(([key, title]) => {
       const group = typical.groups[key];
       const exact = Number.isFinite(group.net_lpd);
-      html += '<section class="report-group"><div class="report-group-heading"><h3>' + title + '</h3><span>Дней: ' + group.days + '</span></div><div class="report-metrics">'
+      html += '<section class="report-group" data-calendar-group="' + key + '"><div class="report-group-heading"><h3>' + title + '</h3><span>Учтено: ' + group.days + ' из ' + group.calendar_days + '</span></div>'
+        + (key === 'holiday' && group.dates.length ? '<p class="field-help">Праздники в периоде: ' + group.dates.map(date => this._reportDate(date)).join(', ') + '.</p>' : '')
+        + (group.excluded_days ? (key === 'holiday'
+          ? group.excluded.map(day => '<p class="report-caveat">' + this._reportDate(day.date) + ': ' + escapeHtml(reasons[day.reason] || day.reason) + '.</p>').join('')
+          : '<details class="report-group-exclusions"><summary>Исключено из среднего: ' + group.excluded_days + '</summary><ul>'
+            + group.excluded.map(day => '<li>' + this._reportDate(day.date) + ': ' + escapeHtml(reasons[day.reason] || day.reason) + '</li>').join('') + '</ul></details>') : '')
+        + '<div class="report-metrics">'
         + this._reportMetric(exact ? 'Чистый' : 'По учтённым циклам', exact ? group.net_lpd : group.adjusted_lpd, 'л/сут')
         + this._reportMetric('Общий', group.gross_lpd, 'л/сут') + '</div></section>';
     });
@@ -357,16 +405,19 @@ const WaterReportUI = {
         + this._reportMetric('Общий расход', month.gross_m3, 'м³', 3)
         + this._reportMetric(exact ? 'Чистый в сутки' : 'По циклам в сутки', exact ? month.net_lpd : month.adjusted_lpd, 'л/сут')
         + this._reportMetric('Общий в сутки', month.gross_lpd, 'л/сут') + '</div>'
-        + '<p class="field-help">Учтённые регенерации: ' + this._formatNumber(month.regeneration_m3, 3) + ' м³ · циклов: ' + month.cycles
-        + (month.unknown_cycles ? ' · без подтверждённого объёма: ' + month.unknown_cycles : '') + '.</p>'
+        + '<p class="field-help">' + (month.unknown_cycles ? 'Подтверждённая часть регенераций: ' : 'Расход регенераций: ')
+        + this._formatNumber(month.unknown_cycles ? month.known_regeneration_m3 : month.regeneration_m3, 3) + ' м³ · измеренных циклов: ' + month.cycles
+        + (month.unknown_cycles ? '. Без подтверждённого объёма: ' + month.unknown_cycles : '') + '.</p>'
         + (!exact ? '<p class="report-caveat">Чистый расход не установлен: требуется полная история и подтверждённый журнал.</p>' : '')
         + (month.status === 'partial' ? '<p class="report-caveat">Данные неполные. Известный объём: ' + this._formatNumber(month.known_gross_m3, 3) + ' м³; это не итог месяца.</p>' : '')
         + '<p class="field-help">Все календарные дни, включая отсутствие. Фактический расход, без прогноза.</p></article>';
     });
     html += '</section><article class="card"><h2>Регенерации за период выборки</h2><div class="report-metrics">'
-      + this._reportMetric('Учтённый технологический расход', report.regenerations.volume_m3, 'м³', 3)
+      + this._reportMetric('Расход за записанные циклы', report.regenerations.volume_m3, 'м³', 3)
       + this._reportMetric('Измеренных циклов', report.regenerations.cycles, '', 0) + '</div>'
-      + '<p class="field-help">Источник: журнал «Водоподготовки». Время цикла не восстановлено; показана записанная дата. Оценочные объёмы не вычитаются.</p>';
+      + '<p class="field-help">Окно учёта: 02:30–04:30 Europe/Moscow в дату цикла из журнала «Водоподготовки». Объём — разность показаний питьевого счётчика из Recorder на границах окна. В него входит всё потребление за эти два часа.</p>'
+      + (report.regenerations.unknown_cycles ? '<p class="report-caveat">Без подтверждённого объёма: ' + report.regenerations.unknown_cycles
+        + '. Подтверждённая часть: ' + this._formatNumber(report.regenerations.known_volume_m3, 3) + ' м³; полный расход неизвестен.</p>' : '');
     if (report.regenerations.events.length) html += '<ul class="report-events">' + report.regenerations.events.map(event => '<li><span>' + this._reportDate(event.date)
       + '</span><strong>' + (Number.isFinite(event.volume_m3) ? this._formatNumber(event.volume_m3 * 1000, 1) + ' л'
         : event.status === 'ambiguous' ? 'Неоднозначная запись' : 'Объём не подтверждён') + '</strong></li>').join('') + '</ul>';
@@ -380,11 +431,9 @@ const WaterReportUI = {
         + (Number.isFinite(change.net_lpd) ? 'Чистое: <strong>' + signed(change.net_lpd) : 'По учтённым циклам: <strong>' + signed(change.adjusted_lpd)) + '</strong>.</p>';
     } else html += '<p class="field-help">Пока недостаточно завершённых дней для сравнения.</p>';
     html += '<p class="field-help">Расчёт на границу ' + this._reportDate(report.comparison.as_of) + ' по текущей истории и текущим настройкам. Это реконструкция, а не сохранённый прошлый отчёт.</p></article>';
-    const reasons = {missing_data: 'неполная история счётчика', regeneration_unknown: 'неизвестен объём регенераций',
-      regeneration_exceeds_total: 'регенерация превышает суточный расход', low_consumption: 'нулевой расход или ниже порога'};
     html += '<details class="card report-details"><summary>Методика и исключённые дни (' + typical.excluded_days + ')</summary>'
       + '<p class="field-help">Источник расхода: ' + escapeHtml(this._config().entities.drinking_total) + '. Часовая статистика Recorder, объёмы м³. Полные сутки: 00:00–24:00 Europe/Moscow. Текущий день исключён. Пропуски не заменяются нулём.</p>'
-      + '<p class="field-help">Чистый расход = общий − измеренные регенерации, если подтверждены все циклы. Нулевые дни и дни ниже порога исключаются только из характерного среднего; месячные суммы и средние включают все календарные дни.</p>'
+      + '<p class="field-help">Чистый расход = общий − расход в окнах 02:30–04:30 записанных регенераций, если подтверждена полнота журнала. Неполное окно или сброс счётчика оставляют объём неизвестным; почасовая интерполяция не используется. Нулевые дни и дни ниже порога исключаются только из характерного среднего; месячные суммы и средние включают все календарные дни.</p>'
       + '<ul>' + typical.excluded.map(day => '<li>' + this._reportDate(day.date) + ': ' + escapeHtml(reasons[day.reason] || day.reason) + '</li>').join('') + '</ul></details>';
     return html;
   },

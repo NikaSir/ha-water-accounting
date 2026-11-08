@@ -93,7 +93,7 @@ def load_settings():
     return module
 
 
-def load_integration(settings):
+def load_integration(settings, windows=None):
     """Load real entry points while substituting only HA and panel plumbing."""
     modules = {
         name: ModuleType(name)
@@ -103,6 +103,14 @@ def load_integration(settings):
     modules["homeassistant.core"].HomeAssistant = FakeHass
     modules["homeassistant.config_entries"].ConfigEntry = SimpleNamespace
     modules["custom_components.water_accounting.settings"] = settings
+    if windows is None:
+        windows = ModuleType("custom_components.water_accounting.regeneration_windows")
+
+        async def setup_windows(hass):
+            pass
+
+        windows.async_setup_regeneration_windows = setup_windows
+    modules["custom_components.water_accounting.regeneration_windows"] = windows
     panel = modules["custom_components.water_accounting.panel"]
 
     async def register(hass):

@@ -1,6 +1,9 @@
 {
   "domain": "water_accounting",
   "name": "NikaS Water Accounting",
+  "after_dependencies": [
+    "recorder"
+  ],
   "codeowners": [
     "@NikaSir"
   ],
@@ -15,5 +18,5 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/NikaSir/ha-water-accounting/issues",
   "requirements": [],
-  "version": "0.3.0-beta002"
+  "version": "0.3.0-beta003"
 }
