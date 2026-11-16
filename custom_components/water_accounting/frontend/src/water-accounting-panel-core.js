@@ -2,7 +2,7 @@
 
 const WATER_APP = Object.freeze({
   title: "Учёт воды",
-  uiVersion: "0.3.0-beta003",
+  uiVersion: "0.3.0-beta004",
   preferredView: "overview",
   safeReturnRoute: "/home/overview",
   tabs: [
@@ -45,6 +45,8 @@ const VALID_VIEWS = new Set(WATER_APP.tabs.map(function (tab) { return tab[0]; }
 const VALID_PERIODS = new Set(["24h", "7d", "30d", "12m"]);
 const STATISTICS_HOUR_MS = 60 * 60 * 1000;
 const BAD_STATES = new Set(["", "unknown", "unavailable", "none", "null"]);
+const REFRESH_SUCCESS_LABEL = "Запрос обновления выполнен";
+const REFRESH_ERROR_LABEL = "Не удалось обновить данные";
 
 function escapeHtml(value) {
   return String(value == null ? "" : value)
@@ -190,6 +192,7 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       window.clearTimeout(this._refreshResultTimer);
       this._refreshResultTimer = null;
     }
+    this._setRefreshVisual("idle");
     if (this._toastTimer !== null) {
       window.clearTimeout(this._toastTimer);
       this._toastTimer = null;
@@ -208,15 +211,22 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     const tabs = Array.isArray(config.tabs) && config.tabs.length
       ? config.tabs.slice(0, 5)
       : WATER_APP.tabs;
+    const integrationVersion = String(config.integration_version ?? "");
+    const installedVersion = /^\d+\.\d+\.\d+(?:-beta\d{3})?$/.test(integrationVersion)
+      ? integrationVersion
+      : "—";
     return {
       title: config.title || WATER_APP.title,
-      uiVersion: /^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$/.test(String(config.ui_version || ""))
-        ? String(config.ui_version)
-        : WATER_APP.uiVersion,
+      versionCaption: `UI v${WATER_APP.uiVersion} / ${installedVersion}`,
       tabs: tabs,
       entities: Object.assign({}, WATER_APP.entities, config.entities || {}),
       pressurePolicy: Object.assign({}, WATER_APP.pressurePolicy, config.pressure_policy || {}),
     };
+  }
+
+  _refreshColorMode() {
+    const darkMode = this._hass?.themes?.darkMode ?? window.matchMedia?.("(prefers-color-scheme: dark)")?.matches;
+    return darkMode ? "dark" : "light";
   }
 
   _mountShell() {
@@ -227,12 +237,13 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       + '<div class="app-shell nikas-shell">'
       + '<header class="app-header nikas-shell__header">'
       + '<button type="button" class="header-action nikas-shell__side-action" id="menu" aria-label="Меню Home Assistant">'
-      + '<ha-icon icon="mdi:menu"></ha-icon></button>'
-      + '<button type="button" class="header-title nikas-shell__title" id="return-source" aria-label="Вернуться на главную панель">'
+      + '<ha-icon icon="mdi:menu" aria-hidden="true"></ha-icon></button>'
+      + '<button type="button" class="header-title nikas-shell__title" id="return-source" aria-label="Вернуться на главную панель" aria-describedby="panel-versions">'
       + '<strong>' + escapeHtml(config.title) + '</strong>'
-      + '<small>UI v' + escapeHtml(config.uiVersion) + '</small></button>'
-      + '<button type="button" class="header-action nikas-shell__side-action nikas-shell__side-action--right" id="refresh" aria-label="Обновить">'
-      + '<ha-icon icon="mdi:refresh"></ha-icon></button>'
+      + '<small id="panel-versions">' + escapeHtml(config.versionCaption) + '</small></button>'
+      + '<button type="button" class="header-action nikas-shell__side-action nikas-shell__side-action--right nikas-shell__side-action--refresh" id="refresh"'
+      + ' data-nikas-color-mode="' + this._refreshColorMode() + '" aria-label="Обновить" aria-busy="false">'
+      + '<ha-icon icon="mdi:refresh" aria-hidden="true"></ha-icon></button>'
       + '</header>'
       + '<main class="canvas-viewport nikas-shell__viewport" aria-label="Рабочая область панели">'
       + '<div class="work-canvas nikas-shell__canvas"><div class="work-content nikas-shell__content"></div></div></main>'
@@ -598,7 +609,10 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     if (!this._shellMounted) return;
     const config = this._config();
     this._setText(".header-title strong", config.title);
-    this._setText(".header-title span", "UI v" + config.uiVersion);
+    this._setText("#panel-versions", config.versionCaption);
+    const refresh = this.shadowRoot.querySelector("#refresh");
+    const colorMode = this._refreshColorMode();
+    if (refresh.dataset.nikasColorMode !== colorMode) refresh.dataset.nikasColorMode = colorMode;
     this._views.forEach((root) => this._applyEntityTargets(root));
     this._patchGenericValues();
     this._patchPressures();
@@ -1150,11 +1164,11 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     if (!button) return;
     const icon = button.querySelector("ha-icon");
     const details = {
-      idle: ["mdi:refresh", "Обновить", "var(--primary-color, #03a9d9)"],
-      busy: ["mdi:refresh", "Обновление данных", "var(--primary-color, #03a9d9)"],
-      success: ["mdi:check", "Данные обновлены", "#43a047"],
-      error: ["mdi:alert-circle-outline", "Ошибка обновления", "#e53935"],
-    }[state] || ["mdi:refresh", "Обновить", "var(--primary-color, #03a9d9)"];
+      idle: ["mdi:refresh", "Обновить", ""],
+      busy: ["mdi:refresh", "Обновление данных", ""],
+      success: ["mdi:check", REFRESH_SUCCESS_LABEL, "#43a047"],
+      error: ["mdi:alert-circle-outline", REFRESH_ERROR_LABEL, "#e53935"],
+    }[state];
     button.classList.toggle("busy", state === "busy");
     button.classList.toggle("success", state === "success");
     button.classList.toggle("error", state === "error");
@@ -1189,8 +1203,11 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       window.clearTimeout(this._toastTimer);
       this._toastTimer = null;
     }
-    const previousToast = this.shadowRoot.querySelector(".panel-toast");
-    if (previousToast) previousToast.classList.remove("visible");
+    const status = this.shadowRoot.querySelector(".panel-toast");
+    if (status) {
+      status.classList.remove("visible");
+      status.textContent = "";
+    }
     const token = ++this._refreshToken;
     this._refreshing = true;
     this._setRefreshVisual("busy");
@@ -1212,7 +1229,8 @@ class NikaSWaterAccountingPanel extends HTMLElement {
       if (!entities.length || !this._hass || typeof this._hass.callService !== "function") {
         throw new Error("Home Assistant refresh service unavailable");
       }
-      await this._hass.callService("homeassistant", "update_entity", { entity_id: entities });
+      const updateResult = await this._hass.callService("homeassistant", "update_entity", { entity_id: entities });
+      if (updateResult === false) throw new Error("Home Assistant declined refresh");
       const loads = await Promise.all(refreshPeriods.map((key) => this._loadPeriod(key)));
       if (loads.some((load) => !load || load.status !== "complete")) {
         throw new Error("Recorder refresh incomplete");
@@ -1232,12 +1250,17 @@ class NikaSWaterAccountingPanel extends HTMLElement {
     if (token !== this._refreshToken || !this.isConnected) return success;
     this._refreshing = false;
     this._setRefreshVisual(success ? "success" : "error");
-    if (!success) this._showToast("Обновить данные не удалось");
+    if (success) {
+      if (status) status.textContent = REFRESH_SUCCESS_LABEL;
+    } else {
+      this._showToast(REFRESH_ERROR_LABEL);
+    }
     this._queuePatch();
     this._refreshResultTimer = window.setTimeout(() => {
       if (token !== this._refreshToken) return;
       this._refreshResultTimer = null;
       this._setRefreshVisual("idle");
+      if (success && status) status.textContent = "";
     }, 1400);
     return success;
   }

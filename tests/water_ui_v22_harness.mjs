@@ -125,6 +125,17 @@ function makePanel(callService, loadResult = { status: "complete" }) {
 }
 
 {
+  const panel = makePanel(async () => false);
+  const pending = panel._refresh();
+  await flush();
+  runDelay(900);
+  await flush();
+  assert.equal(await pending, false, "a declined HA refresh must show failure even when Recorder succeeds");
+  assert.equal(panel.shadowRoot.refresh.icon.getAttribute("icon"), "mdi:alert-circle-outline");
+  panel.disconnectedCallback();
+}
+
+{
   const calls = [];
   const panel = makePanel(async (...args) => { calls.push(args); });
   const pending = panel._refresh();
@@ -138,7 +149,7 @@ function makePanel(callService, loadResult = { status: "complete" }) {
   await flush();
   assert.equal(await pending, true);
   assert.equal(panel.shadowRoot.refresh.icon.getAttribute("icon"), "mdi:check");
-  assert.equal(panel.shadowRoot.refresh.getAttribute("aria-label"), "Данные обновлены");
+  assert.equal(panel.shadowRoot.refresh.getAttribute("aria-label"), "Запрос обновления выполнен");
   assert.equal(panel.shadowRoot.refresh.style.color, "#43a047");
   assert.ok([...timers.values()].some((timer) => timer.delay === 1400));
   panel.disconnectedCallback();
@@ -188,9 +199,9 @@ function makePanel(callService, loadResult = { status: "complete" }) {
   await flush();
   assert.equal(await pending, false);
   assert.equal(panel.shadowRoot.refresh.icon.getAttribute("icon"), "mdi:alert-circle-outline");
-  assert.equal(panel.shadowRoot.refresh.getAttribute("aria-label"), "Ошибка обновления");
+  assert.equal(panel.shadowRoot.refresh.getAttribute("aria-label"), "Не удалось обновить данные");
   assert.equal(panel.shadowRoot.refresh.style.color, "#e53935");
-  assert.equal(panel.shadowRoot.toast.textContent, "Обновить данные не удалось");
+  assert.equal(panel.shadowRoot.toast.textContent, "Не удалось обновить данные");
   panel.disconnectedCallback();
 }
 
@@ -251,4 +262,4 @@ function makePanel(callService, loadResult = { status: "complete" }) {
   assert.equal(timers.size, 0, "disconnect must clear refresh timers");
 }
 
-process.stdout.write("Water UI 0.2.0-beta004 / NikaS UI 2.2 production regression OK.\n");
+process.stdout.write("Water Accounting / NikaS UI 2.2 production regression OK.\n");
