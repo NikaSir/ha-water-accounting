@@ -1,6 +1,6 @@
 # Соответствие NikaS UI Standard v2.2 / Navigation Contract v1.3
 
-Версия интеграции и UI `0.3.0-beta004`. Верхнее меню сверено с [ревизией NikaS `f04fdc8`](https://github.com/NikaSir/ha-contract-generated-ui/tree/f04fdc8904472008878a81dceaca39066f11cf75).
+Версия интеграции и UI `0.3.0-beta005`. Верхнее меню сверено с [ревизией NikaS `f04fdc8`](https://github.com/NikaSir/ha-contract-generated-ui/tree/f04fdc8904472008878a81dceaca39066f11cf75).
 
 | Требование | Статус | Реализация / свидетельство |
 | --- | --- | --- |

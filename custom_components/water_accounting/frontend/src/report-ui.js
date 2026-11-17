@@ -16,6 +16,8 @@ const WaterReportUI = {
     this._settingsNotice = '';
     this._reportLoad = null;
     this._reportToken = 0;
+    this._reportExcluding = false;
+    this._reportExclusionNotice = '';
   },
 
   _disconnectAccountUI() {
@@ -27,6 +29,7 @@ const WaterReportUI = {
     this._settingsTrusted = false;
     this._settingsAttempted = false;
     this._reportLoad = null;
+    this._reportExclusionNotice = '';
   },
 
   _isAccountAdmin() {
@@ -143,6 +146,8 @@ const WaterReportUI = {
       const action = event.target?.closest?.('[data-settings-action]')?.dataset.settingsAction;
       if (action === 'save') this._saveAccountSettings();
       if (action === 'reload') this._reloadAccountDraft();
+      const date = event.target?.closest?.('[data-exclude-regeneration]')?.dataset.excludeRegeneration;
+      if (date) this._confirmRegenerationExclusion(date);
     });
     this.shadowRoot.addEventListener('submit', event => {
       if (event.target.matches('.account-settings-form')) {
@@ -274,7 +279,12 @@ const WaterReportUI = {
     return '<article class="card page-heading"><p class="eyebrow">По правилам еженедельной сводки</p><h1>Статистика воды</h1>'
       + '<p>Питьевая вода · завершённые сутки · Europe/Moscow</p></article>'
       + '<p class="account-notice" data-report-status role="status" aria-live="polite">Загрузка отчёта…</p>'
-      + '<div class="water-report" data-report-content></div>';
+      + '<div class="water-report" data-report-content></div>'
+      + '<dialog class="regeneration-dialog" data-regeneration-dialog aria-labelledby="regeneration-dialog-title"'
+      + ' aria-describedby="regeneration-dialog-date"><form method="dialog">'
+      + '<h2 id="regeneration-dialog-title">Удалить запись из учёта?</h2><p id="regeneration-dialog-date"></p>'
+      + '<div class="settings-actions"><button class="account-button" value="cancel" autofocus>Отмена</button>'
+      + '<button class="account-button" value="exclude">Удалить</button></div></form></dialog>';
   },
 
   _reportKey(settings) {
@@ -339,8 +349,9 @@ const WaterReportUI = {
         const treatment = journal.status === 'fulfilled' ? journal.value : null;
         const regenerationWindows = await this._loadRegenerationWindows(treatment, period, entity);
         if (token !== this._reportToken) return null;
-        load.result = WaterReportModel.build({now, settings: settings.settings, rows: results[0].value[entity],
-          treatment, treatmentAvailable: journal.status === 'fulfilled', regenerationWindows, regenerationEntityId: entity, unit: 'm³'});
+        load.input = {now, settings: settings.settings, rows: results[0].value[entity],
+          treatment, treatmentAvailable: journal.status === 'fulfilled', regenerationWindows, regenerationEntityId: entity, unit: 'm³'};
+        load.result = WaterReportModel.build(load.input);
         load.status = 'complete';
         load.loadedAt = Date.now();
         return load;
@@ -355,6 +366,52 @@ const WaterReportUI = {
     return load.promise;
   },
 
+  _confirmRegenerationExclusion(date) {
+    const dialog = this._views.get('statistics')?.querySelector('[data-regeneration-dialog]');
+    if (!dialog || dialog.open || this._reportExcluding || !this._isAccountAdmin()) return;
+    this._setText('#regeneration-dialog-date', 'Регенерация за ' + this._reportDate(date) + ' · 0 л', dialog);
+    dialog.returnValue = 'cancel';
+    dialog.showModal();
+    dialog.addEventListener('close', () => {
+      if (dialog.returnValue === 'exclude') this._excludeZeroRegeneration(date);
+    }, {once: true});
+  },
+
+  async _excludeZeroRegeneration(date) {
+    const load = this._reportLoad;
+    if (this._reportExcluding || !this._settingsTrusted || !this._isAccountAdmin() ||
+      load?.status !== 'complete' || load.key !== this._reportKey(this._accountSettings.settings) ||
+      !load.result.regenerations.events.some(event => event.date === date && event.volume_m3 === 0)) return false;
+
+    const {regenerationEntityId: entity, regenerationWindows} = load.input;
+    this._reportExcluding = true;
+    this._reportExclusionNotice = 'Удаление записи…';
+    this._queuePatch();
+    try {
+      const result = await this._withTimeout(this._hass.callWS({type: 'water_accounting/regeneration_windows',
+        action: 'exclude_zero', entity_id: entity, dates: [date]}), 15000);
+      if (result?.entity_id !== entity || result.date !== date || result.status !== 'excluded_zero') {
+        throw new Error('Invalid exclusion response');
+      }
+      if (this._reportLoad === load) {
+        regenerationWindows.measurements[date] = {...regenerationWindows.measurements[date], status: result.status};
+        load.result = WaterReportModel.build(load.input);
+      } else if (this._reportLoad) {
+        this._reportToken++;
+        this._reportLoad = null;
+      }
+      this._reportExclusionNotice = 'Регенерация за ' + this._reportDate(date) + ' удалена из учёта.';
+      return true;
+    } catch (error) {
+      this._reportExclusionNotice = error?.code === 'invalid_request' && error.message ? error.message
+        : 'Не удалось подтвердить удаление. Обновите отчёт или повторите действие.';
+      return false;
+    } finally {
+      this._reportExcluding = false;
+      this._queuePatch();
+    }
+  },
+
   _reportDate(value) {
     return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
       ? value.slice(8, 10) + '.' + value.slice(5, 7) + '.' + value.slice(0, 4) : '—';
@@ -366,7 +423,7 @@ const WaterReportUI = {
       + '<small>' + escapeHtml(unit) + '</small></strong></div>';
   },
 
-  _reportMarkup(report) {
+  _reportMarkup(report, canExclude = this._isAccountAdmin()) {
     const typical = report.typical, all = typical.groups.all;
     const reasons = {missing_data: 'неполная история счётчика', regeneration_unknown: 'неизвестен объём регенераций',
       regeneration_exceeds_total: 'регенерация превышает суточный расход', low_consumption: 'нулевой расход или ниже порога'};
@@ -418,12 +475,19 @@ const WaterReportUI = {
       + '<p class="field-help">Окно учёта: 02:30–04:30 Europe/Moscow в дату цикла из журнала «Водоподготовки». Объём — разность показаний питьевого счётчика из Recorder на границах окна. В него входит всё потребление за эти два часа.</p>'
       + (report.regenerations.unknown_cycles ? '<p class="report-caveat">Без подтверждённого объёма: ' + report.regenerations.unknown_cycles
         + '. Подтверждённая часть: ' + this._formatNumber(report.regenerations.known_volume_m3, 3) + ' м³; полный расход неизвестен.</p>' : '');
-    if (report.regenerations.events.length) html += '<ul class="report-events">' + report.regenerations.events.map(event => '<li><span>' + this._reportDate(event.date)
-      + '</span><strong>' + (Number.isFinite(event.volume_m3) ? this._formatNumber(event.volume_m3 * 1000, 1) + ' л'
-        : event.status === 'ambiguous' ? 'Неоднозначная запись' : 'Объём не подтверждён') + '</strong></li>').join('') + '</ul>';
-    else html += '<p class="field-help">' + (report.regenerations.available ? 'В журнале нет циклов за этот период. Полнота определяется проверенным интервалом.' : 'Журнал недоступен.') + '</p>';
+    if (report.regenerations.events.length) html += '<ul class="report-events">' + report.regenerations.events.map(event => {
+      const date = this._reportDate(event.date);
+      const liters = event.volume_m3 === null ? null : event.volume_m3 * 1000;
+      const volume = liters === null ? (event.status === 'ambiguous' ? 'Неоднозначная запись' : 'Объём не подтверждён')
+        : (liters > 0 && liters < 0.1 ? '&lt; ' + this._formatNumber(0.1, 1) : this._formatNumber(liters, 1)) + ' л';
+      const remove = canExclude && liters === 0 ? '<button type="button" class="account-button" data-exclude-regeneration="' + event.date
+        + '" aria-label="Удалить из учёта регенерацию за ' + date + '">Удалить из учёта</button>' : '';
+      return '<li><span>' + date + '</span><div class="report-event-value"><strong>' + volume + '</strong>' + remove + '</div></li>';
+    }).join('') + '</ul>';
+    else html += '<p class="field-help">' + (report.regenerations.available ? 'Нет учтённых циклов за этот период. Полнота определяется проверенным интервалом.' : 'Журнал недоступен.') + '</p>';
     report.regenerations.issues.forEach(issue => { html += '<p class="report-caveat">' + escapeHtml(issue) + '</p>'; });
-    html += '</article><article class="card"><h2>Изменение к прошлому понедельнику</h2>';
+    html += '<p class="report-caveat" data-regeneration-feedback role="status" hidden></p></article>'
+      + '<article class="card"><h2>Изменение к прошлому понедельнику</h2>';
     if (report.comparison.available) {
       const change = report.comparison.delta_all;
       const signed = value => Number.isFinite(value) ? (value > 0 ? '+' : '') + this._formatNumber(value, 1) + ' л/сут' : '—';
@@ -451,12 +515,19 @@ const WaterReportUI = {
         : 'Рассчитано: ' + this._formatDateTime(load.result.generated_at) + ' · Europe/Moscow'), root);
     if (host) {
       host.hidden = !ready;
-      if (ready && host._reportResult !== load.result) {
+      if (!ready) return;
+      const canExclude = this._isAccountAdmin();
+      if (host._reportResult !== load.result || host._reportCanExclude !== canExclude) {
         const open = Array.from(host.querySelectorAll('details')).map(item => item.open);
-        host.innerHTML = this._reportMarkup(load.result);
+        host.innerHTML = this._reportMarkup(load.result, canExclude);
         host.querySelectorAll('details').forEach((item, index) => { item.open = open[index] || false; });
         host._reportResult = load.result;
+        host._reportCanExclude = canExclude;
       }
+      host.querySelectorAll('[data-exclude-regeneration]').forEach(button => { button.disabled = this._reportExcluding; });
+      const feedback = host.querySelector('[data-regeneration-feedback]');
+      feedback.hidden = !this._reportExclusionNotice;
+      this._setText('[data-regeneration-feedback]', this._reportExclusionNotice, host);
     }
   },
 };
