@@ -1,6 +1,6 @@
 {
   "name": "ha-water-accounting",
-  "version": "0.3.0-beta004",
+  "version": "0.3.0-beta005",
   "private": true,
   "type": "module",
   "scripts": {

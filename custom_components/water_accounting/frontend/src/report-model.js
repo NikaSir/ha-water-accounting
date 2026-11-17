@@ -135,15 +135,18 @@ const WaterReportModel = (() => {
       ? windows.measurements[date]:null;
     if(!raw || typeof raw!=='object')return record;
     if(raw.date!==date)return {...record,reason:'invalid_window'};
-    if(raw.status!=='measured')return {...record,reason:typeof raw.reason==='string'?raw.reason:'window_unavailable'};
+    if(raw.status!=='measured' && raw.status!=='excluded_zero') {
+      return {...record,reason:typeof raw.reason==='string'?raw.reason:'window_unavailable'};
+    }
     const value=finite(raw.water_m3),before=finite(raw.start_meter_m3),after=finite(raw.end_meter_m3);
     if(value===null || value<0 || before===null || before<0 || after===null || after<before
+      || (raw.status==='excluded_zero' && value!==0) || (value===0 && before!==after)
       || Math.abs(after-before-value)>Math.max(1e-7,value*1e-6)
       || raw.source!=='recorder_history' || typeof raw.start_time!=='string' || typeof raw.end_time!=='string'
       || Date.parse(raw.start_time)!==Date.parse(start) || Date.parse(raw.end_time)!==Date.parse(end)) {
       return {...record,reason:'invalid_window'};
     }
-    return {...record,volume_m3:value,status:'measured',reason:null,start_meter_m3:before,end_meter_m3:after};
+    return {...record,volume_m3:value,status:raw.status,reason:null,start_meter_m3:before,end_meter_m3:after};
   }
 
   function journal(treatment, available, period, windows, entityId) {
@@ -181,6 +184,9 @@ const WaterReportModel = (() => {
         byDate.set(date,{...windowMeasurement(date,null,entityId),status:'ambiguous',reason:'ambiguous_cycle',
           source:'Водоподготовка · неоднозначные записи'});
         issues.push('Несколько неоднозначных записей регенерации за '+date+'.');
+      } else if(items[0].status==='excluded_zero') {
+        byDate.delete(date);
+        return;
       } else {
         byDate.set(date,items[0]);
         if(items[0].volume_m3===null)issues.push(items[0].reason==='cycle_incomplete'

@@ -122,6 +122,8 @@ def load_windows():
     ws.async_register_command = lambda hass, function: hass.commands.append(function)
     modules["homeassistant.components"].websocket_api = ws
     modules["voluptuous"].Required = lambda value: value
+    modules["voluptuous"].Optional = lambda value, **kwargs: value
+    modules["voluptuous"].In = lambda values: values
     recorder = modules["homeassistant.components.recorder"]
     recorder.get_instance = lambda hass: hass.recorder
     recorder.history = modules["homeassistant.components.recorder.history"]
@@ -331,6 +333,51 @@ class WindowTests(unittest.IsolatedAsyncioTestCase):
         reader = Connection()
         await self.module.regeneration_windows_command(self.hass, reader, request)
         self.assertEqual(reader.results[0][1]["measurements"][DAY]["status"], "measured")
+
+    async def test_excluding_measured_zero_is_admin_only_durable_and_idempotent(self):
+        self.hass.history[DAY] = [state(40), state(40, "04:20:00")]
+        original = await self.measurement()
+        self.assertEqual(original["water_m3"], 0)
+        cache = Path(self.manager.store.path)
+        before = cache.read_bytes()
+        request = {"id": 1, "entity_id": ENTITY, "dates": [DAY], "action": "exclude_zero"}
+        reader = Connection()
+        await self.module.regeneration_windows_command(self.hass, reader, request)
+        self.assertEqual(reader.errors[-1][1], "unauthorized")
+
+        admin = Connection(admin=True)
+        await self.module.regeneration_windows_command(self.hass, admin, {**request, "dates": [DAY, DAY]})
+        self.assertEqual(admin.errors[-1][1], "invalid_request")
+        await asyncio.gather(*(self.module.regeneration_windows_command(self.hass, admin, request) for _ in range(2)))
+        self.assertEqual(len(admin.results), 2)
+        self.assertEqual(admin.results[0][1], {"entity_id": ENTITY, "date": DAY, "status": "excluded_zero"})
+        self.assertEqual(admin.results[0], admin.results[1])
+        self.assertEqual(cache.read_bytes(), before)
+
+        restarted = FakeHass(self.temporary.name)
+        restarted.history.clear()
+        await self.module.async_setup_regeneration_windows(restarted)
+        manager = restarted.data["water_accounting"]["regeneration_windows"]
+        result = await manager.async_get(ENTITY, [DAY])
+        self.assertEqual(result["measurements"][DAY], {**original, "status": "excluded_zero", "cached": True})
+        different_meter = await manager.async_get("sensor.other_water", [DAY])
+        self.assertEqual(different_meter["measurements"][DAY]["status"], "unavailable")
+
+    async def test_only_exact_measured_zero_can_be_excluded_and_unsaved_changes_are_rejected(self):
+        with self.assertRaises(ValueError):
+            await self.manager.async_exclude_zero(ENTITY, DAY)
+        self.hass.history[DAY] = [state(40), state(40.00001, "04:20:00")]
+        self.assertGreater((await self.measurement())["water_m3"], 0)
+        with self.assertRaises(ValueError):
+            await self.manager.async_exclude_zero(ENTITY, DAY)
+        other = "2026-11-05"
+        self.hass.history[other] = [state(41, day=other)]
+        self.assertEqual((await self.measurement(other))["water_m3"], 0)
+        self.manager.exclusions.fail_silently = True
+        with self.assertRaises(OSError):
+            await self.manager.async_exclude_zero(ENTITY, other)
+        self.assertEqual((await self.measurement(other))["status"], "measured")
+        self.assertFalse(Path(self.manager.exclusions.path).exists())
 
     async def test_storage_failure_corruption_and_missing_saved_file_do_not_claim_success(self):
         self.manager.store.fail_silently = True

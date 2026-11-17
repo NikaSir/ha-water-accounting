@@ -51,7 +51,12 @@
 .report-warning ul, .report-details ul { padding-left: 20px; margin-bottom: 0; }
 .report-caveat { color: var(--wa-muted); font-size: 13px; line-height: 1.5; margin: 10px 0 0; }
 .report-events { padding: 0; margin: 14px 0 0; list-style: none; }
-.report-events li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--wa-divider); font-size: 14px; }
+.report-events li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--wa-divider); font-size: 14px; }
+.report-event-value { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.regeneration-dialog { width: min(380px, calc(100% - 32px)); padding: 20px; border: 1px solid var(--wa-divider); border-radius: 16px; background: var(--wa-card); color: var(--wa-text); }
+.regeneration-dialog::backdrop { background: rgb(0 0 0 / 0.45); }
+.regeneration-dialog h2 { margin: 0; font-size: 18px; }
+.regeneration-dialog .settings-actions { justify-content: flex-end; }
 .report-details summary, .diagnostic-details > summary, .verification-settings > summary { cursor: pointer; font-size: 15px; font-weight: 650; padding: 4px 0; }
 .diagnostic-details[open] > summary { margin-bottom: 14px; }
 .diagnostic-details .diagnostic-group { margin-top: 14px; }

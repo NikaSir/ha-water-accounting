@@ -204,7 +204,7 @@ test('report requests explicit volume units and Moscow full days; journal failur
   assert.match(panel._reportMarkup(load.result), /Чистый расход не установлен/);
 });
 
-function reportFixture({windowError = false} = {}) {
+function reportFixture({windowError = false, volume = 0.3, exclude} = {}) {
   const calls = [];
   const panel = make(message => {
     calls.push(message);
@@ -214,11 +214,12 @@ function reportFixture({windowError = false} = {}) {
       {action: 'regeneration', date: '2026-11-08'},
     ]}}});
     if (message.type === 'water_accounting/regeneration_windows') {
+      if (message.action === 'exclude_zero') return exclude(message);
       if (windowError) return Promise.reject({code: 'unknown_command'});
       return Promise.resolve({entity_id: message.entity_id,
         window: {start: '02:30', end: '04:30', timezone: 'Europe/Moscow'},
         measurements: Object.fromEntries(message.dates.map(date => [date, {date, status: 'measured',
-          water_m3: 0.3, start_meter_m3: 100, end_meter_m3: 100.3,
+          water_m3: volume, start_meter_m3: 100, end_meter_m3: 100 + volume,
           start_time: date + 'T02:30:00+03:00', end_time: date + 'T04:30:00+03:00', source: 'recorder_history'}]))});
     }
     const start = Date.parse(message.start_time), end = Date.parse(message.end_time);
@@ -230,6 +231,35 @@ function reportFixture({windowError = false} = {}) {
   });
   return {panel, calls};
 }
+
+test('zero cycle stays visible until the server acknowledges a single removal', async () => {
+  const response = deferred();
+  const {panel, calls} = reportFixture({volume: 0, exclude: () => response.promise});
+  const load = await panel._loadWaterReport();
+  assert.match(panel._reportMarkup(load.result), /data-exclude-regeneration="2026-11-04"/);
+  assert.doesNotMatch(panel._reportMarkup(load.result, false), /data-exclude-regeneration/);
+  const deleting = panel._excludeZeroRegeneration('2026-11-04');
+  assert.equal(load.result.regenerations.cycles, 1);
+  assert.equal(await panel._excludeZeroRegeneration('2026-11-04'), false);
+  const request = calls.find(message => message.action === 'exclude_zero');
+  assert.deepEqual(copy(request.dates), ['2026-11-04']);
+  response.resolve({entity_id: request.entity_id, date: '2026-11-04', status: 'excluded_zero'});
+  assert.equal(await deleting, true);
+  assert.equal(load.result.regenerations.cycles, 0);
+  assert.doesNotMatch(panel._reportMarkup(load.result), /data-exclude-regeneration/);
+});
+
+test('tiny positive consumption stays visible without a delete control and errors preserve a zero row', async () => {
+  const positive = reportFixture({volume: 0.00001}).panel;
+  const smallReport = await positive._loadWaterReport();
+  assert.match(positive._reportMarkup(smallReport.result), /&lt; 0,1 л/);
+  assert.doesNotMatch(positive._reportMarkup(smallReport.result), /data-exclude-regeneration/);
+  const {panel} = reportFixture({volume: 0, exclude: () => Promise.reject({code: 'storage_error'})});
+  const load = await panel._loadWaterReport();
+  assert.equal(await panel._excludeZeroRegeneration('2026-11-04'), false);
+  assert.match(panel._reportExclusionNotice, /Не удалось подтвердить удаление/);
+  assert.equal(load.result.regenerations.cycles, 1);
+});
 
 test('report loads recorded date windows and includes November 4 as a holiday', async () => {
   const {panel, calls} = reportFixture();

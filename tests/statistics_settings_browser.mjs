@@ -93,6 +93,60 @@ try {
   await by('[data-calendar-group="holiday"]').scrollIntoViewIfNeeded();
   await page.screenshot({path:resolve(output,'holiday-missing-window-mobile.png')});
 
+  await page.setViewportSize({width:320,height:700});
+  await page.goto(origin+'/preview/index.html?view=overview');
+  await by('.page-overview').waitFor({state:'visible'});
+  await page.evaluate(()=> {
+    const original = panel.hass.callWS;
+    const date = '2026-11-04';
+    let excluded = false;
+    window.zeroExclusion = {requests: 0};
+    panel.hass = {...panel.hass, callWS: async message => {
+      if (message.type !== 'water_accounting/regeneration_windows') return original(message);
+      if (message.action === 'exclude_zero') {
+        window.zeroExclusion.requests++;
+        await new Promise(done => { window.zeroExclusion.finish = done; });
+        excluded = true;
+        return {entity_id: message.entity_id, date: message.dates[0], status: 'excluded_zero'};
+      }
+      const response = await original(message);
+      const record = response.measurements[date];
+      if (record) Object.assign(record, {water_m3: 0, end_meter_m3: record.start_meter_m3,
+        status: excluded ? 'excluded_zero' : 'measured'});
+      return response;
+    }};
+  });
+  await open('statistics');
+  const removeZero = by('[data-exclude-regeneration="2026-11-04"]');
+  const dialog = by('[data-regeneration-dialog]');
+  await removeZero.waitFor({state:'visible'});
+  assert.equal(await by('[data-exclude-regeneration]').count(), 1);
+  const activeReport = () => page.evaluate(() => panel._reportLoad.result);
+  const before = await activeReport();
+  await removeZero.click();
+  await dialog.waitFor({state:'visible'});
+  assert.match(await dialog.innerText(), /04\.11\.2026 · 0 л/);
+  await dialog.locator('button[value="cancel"]').click();
+  await dialog.waitFor({state:'hidden'});
+  assert.equal(await page.evaluate(() => window.zeroExclusion.requests), 0);
+  await removeZero.click();
+  await dialog.locator('button[value="exclude"]').click();
+  await page.waitForFunction(() => Boolean(window.zeroExclusion.finish));
+  await tick();
+  assert.equal(await removeZero.isDisabled(), true);
+  assert.equal((await activeReport()).regenerations.cycles, before.regenerations.cycles);
+  await page.evaluate(() => window.zeroExclusion.finish());
+  await removeZero.waitFor({state:'detached'});
+  assert.match(await by('[data-regeneration-feedback]').innerText(), /удалена из учёта/);
+  const after = await activeReport();
+  assert.equal(after.regenerations.cycles, before.regenerations.cycles - 1);
+  assert.equal(after.months[0].gross_m3, before.months[0].gross_m3);
+  await page.evaluate(() => panel._loadWaterReport(true));
+  await tick();
+  assert.equal(await removeZero.count(), 0);
+  assert.equal((await activeReport()).regenerations.cycles, after.regenerations.cycles);
+  await page.setViewportSize({width:390,height:844});
+
   // A deliberate outage must be neutral, while drinking-water faults remain faults.
   await page.goto(origin+'/preview/index.html?view=overview&disabled=1');
   await by('.page-overview').waitFor({state:'visible'});

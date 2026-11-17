@@ -7,7 +7,6 @@ boundaries, not interpolated samples. Confirmed results survive Recorder purge.
 from __future__ import annotations
 
 import asyncio
-from copy import deepcopy
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
@@ -34,6 +33,7 @@ _LOGGER = logging.getLogger(__name__)
 _MOSCOW = ZoneInfo("Europe/Moscow")
 _WINDOW = {"start": "02:30", "end": "04:30", "timezone": "Europe/Moscow"}
 _STORAGE_KEY = "water_accounting.regeneration_windows"
+_EXCLUSIONS_KEY = "water_accounting.regeneration_exclusions"
 _STORAGE_VERSION = 1
 _REGISTERED_KEY = "regeneration_windows_command_registered"
 _MANAGER_KEY = "regeneration_windows_manager"
@@ -202,7 +202,11 @@ def _finite_nonnegative(value: Any) -> bool:
         return False
 
 
-def _validate_cache(value: Any) -> dict[str, Any]:
+def _is_zero_window(record: dict[str, Any]) -> bool:
+    return record["water_m3"] == 0 and record["start_meter_m3"] == record["end_meter_m3"]
+
+
+def _validate_cache(value: Any, storage_key: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != {"measurements"} or not isinstance(value["measurements"], dict):
         raise ValueError("Неверная структура измерений")
     for key, record in value["measurements"].items():
@@ -225,10 +229,12 @@ def _validate_cache(value: Any) -> dict[str, Any]:
         difference = record["end_meter_m3"] - record["start_meter_m3"]
         if difference < 0 or not math.isclose(difference, record["water_m3"], abs_tol=1e-9, rel_tol=1e-9):
             raise ValueError("Объём не совпадает с показаниями")
+        if storage_key == _EXCLUSIONS_KEY and not _is_zero_window(record):
+            raise ValueError("Исключение допустимо только для нулевого расхода")
     return value
 
 
-def _read_cache_file(filename: str) -> dict[str, Any] | None:
+def _read_cache_file(filename: str, storage_key: str) -> dict[str, Any] | None:
     path = Path(filename)
     try:
         text = path.read_text(encoding="utf-8")
@@ -241,9 +247,9 @@ def _read_cache_file(filename: str) -> dict[str, Any] | None:
         if (not isinstance(envelope, dict) or type(envelope.get("version")) is not int
                 or envelope["version"] != _STORAGE_VERSION
                 or type(envelope.get("minor_version")) is not int or envelope["minor_version"] != 1
-                or envelope.get("key") != _STORAGE_KEY):
+                or envelope.get("key") != storage_key):
             raise ValueError("Неподдерживаемый формат измерений")
-        return _validate_cache(envelope.get("data"))
+        return _validate_cache(envelope.get("data"), storage_key)
     except (AttributeError, TypeError, ValueError) as err:
         raise OSError("Хранилище измерений повреждено; требуется восстановление") from err
 
@@ -251,18 +257,24 @@ def _read_cache_file(filename: str) -> dict[str, Any] | None:
 class RegenerationWindowStore(Store):
     """Keep immutable confirmed window results, with durable write verification."""
 
-    def __init__(self, hass: HomeAssistant) -> None:
-        super().__init__(hass, _STORAGE_VERSION, _STORAGE_KEY, atomic_writes=True)
+    def __init__(self, hass: HomeAssistant, storage_key: str = _STORAGE_KEY) -> None:
+        super().__init__(hass, _STORAGE_VERSION, storage_key, atomic_writes=True)
         self._windows_hass = hass
+        self._storage_key = storage_key
+        self._seen_saved = False
 
     async def async_load(self) -> dict[str, Any] | None:
         try:
-            return await self._windows_hass.async_add_executor_job(_read_cache_file, self.path)
+            snapshot = await self._windows_hass.async_add_executor_job(_read_cache_file, self.path, self._storage_key)
         except UnicodeError as err:
             raise OSError("Хранилище измерений имеет неверную кодировку") from err
+        if snapshot is None and self._seen_saved:
+            raise OSError("Хранилище ранее сохранённых измерений отсутствует")
+        self._seen_saved = snapshot is not None
+        return snapshot
 
     async def async_save(self, value: dict[str, Any]) -> None:
-        _validate_cache(value)
+        _validate_cache(value, self._storage_key)
         await super().async_save(value)
         if await self.async_load() != value:
             raise OSError("Не удалось подтвердить сохранение измерений на диске")
@@ -274,30 +286,42 @@ class RegenerationWindowManager:
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self.store = RegenerationWindowStore(hass)
+        self.exclusions = RegenerationWindowStore(hass, _EXCLUSIONS_KEY)
         self._lock = asyncio.Lock()
-        self._seen_saved = False
 
     async def _read(self) -> dict[str, Any]:
-        snapshot = await self.store.async_load()
-        if snapshot is None:
-            if self._seen_saved:
-                raise OSError("Хранилище ранее сохранённых измерений отсутствует")
-            return {"measurements": {}}
-        self._seen_saved = True
-        return snapshot
+        return await self.store.async_load() or {"measurements": {}}
+
+    async def async_exclude_zero(self, entity_id: str, day: str) -> dict[str, Any]:
+        """Mark a previously measured zero window as erroneous in accounting."""
+        key = _cache_key(entity_id, day)
+        async with self._lock:
+            snapshot = await self.exclusions.async_load() or {"measurements": {}}
+            excluded = snapshot["measurements"]
+            record = (await self._read())["measurements"].get(key, excluded.get(key))
+            if moscow_now() < window_bounds(day)[1] or record is None or not _is_zero_window(record):
+                raise ValueError("Удалить можно только запись с подтверждённым нулевым расходом")
+            if key not in excluded:
+                excluded[key] = record
+                await self.exclusions.async_save(snapshot)
+            return {"entity_id": entity_id, "date": day, "status": "excluded_zero"}
 
     async def async_get(self, entity_id: str, dates: list[str]) -> dict[str, Any]:
         dates = _validate_request(entity_id, dates)
         async with self._lock:
             snapshot = await self._read()
             cached = snapshot["measurements"]
+            exclusions = await self.exclusions.async_load()
+            excluded = exclusions["measurements"] if exclusions is not None else {}
             measurements: dict[str, dict[str, Any]] = {}
             pending: list[str] = []
             for day in dates:
+                key = _cache_key(entity_id, day)
                 if moscow_now() < window_bounds(day)[1]:
                     measurements[day] = _unavailable(day, "window_incomplete")
-                elif (record := cached.get(_cache_key(entity_id, day))) is not None:
-                    measurements[day] = {**deepcopy(record), "cached": True}
+                elif (record := cached.get(key, excluded.get(key))) is not None:
+                    status = "excluded_zero" if key in excluded and _is_zero_window(record) else "measured"
+                    measurements[day] = {**record, "status": status, "cached": True}
                 else:
                     pending.append(day)
             recorder = None
@@ -323,7 +347,6 @@ class RegenerationWindowManager:
                     changed = True
             if changed:
                 await self.store.async_save(snapshot)
-                self._seen_saved = True
             return {"entity_id": entity_id, "window": dict(_WINDOW), "measurements": measurements}
 
 
@@ -331,17 +354,24 @@ class RegenerationWindowManager:
     vol.Required("type"): "water_accounting/regeneration_windows",
     vol.Required("entity_id"): str,
     vol.Required("dates"): list,
+    vol.Optional("action", default="get"): vol.In(("get", "exclude_zero")),
 })
 @websocket_api.async_response
 async def regeneration_windows_command(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
-    """Read only the water meter history the authenticated caller may access."""
+    """Read permitted meter windows, or exclude a measured zero as an admin."""
     request_id = msg["id"]
     user = connection.user
     if user is None:
         connection.send_error(request_id, "unauthorized", "Требуется вход в Home Assistant")
         return
+    exclude = msg.get("action") == "exclude_zero"
+    if exclude and not user.is_admin:
+        connection.send_error(request_id, "unauthorized", "Удалять записи из учёта может администратор Home Assistant")
+        return
     try:
         dates = _validate_request(msg.get("entity_id"), msg.get("dates"))
+        if exclude and len(msg["dates"]) != 1:
+            raise ValueError("Укажите одну дату регенерации")
     except ValueError as err:
         connection.send_error(request_id, "invalid_request", str(err))
         return
@@ -354,7 +384,10 @@ async def regeneration_windows_command(hass: HomeAssistant, connection: Any, msg
         connection.send_error(request_id, "not_loaded", "Измерения регенераций недоступны")
         return
     try:
-        result = await manager.async_get(entity_id, dates)
+        if exclude:
+            result = await manager.async_exclude_zero(entity_id, dates[0])
+        else:
+            result = await manager.async_get(entity_id, dates)
     except OSError:
         connection.send_error(request_id, "storage_error", "Не удалось прочитать или сохранить измерения регенераций. Проверьте хранилище интеграции")
     except ValueError as err:
@@ -376,3 +409,4 @@ async def async_setup_regeneration_windows(hass: HomeAssistant) -> None:
     data["regeneration_windows"] = manager
     async with manager._lock:
         await manager._read()
+        await manager.exclusions.async_load()

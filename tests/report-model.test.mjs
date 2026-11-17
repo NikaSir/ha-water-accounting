@@ -54,6 +54,33 @@ function build(overrides = {}) {
 }
 const close = (actual, expected) => assert.ok(Math.abs(actual-expected)<0.00001, `${actual} != ${expected}`);
 
+test('excluded zero window is omitted from cycle counts but keeps the day and total consumption', () => {
+  const regenerationWindows = windows({'2026-11-04':0, '2026-11-07':0.2});
+  const before = build({regenerationWindows});
+  regenerationWindows.measurements['2026-11-04'].status = 'excluded_zero';
+  const after = build({regenerationWindows});
+  assert.equal(before.regenerations.cycles, 2);
+  assert.equal(after.regenerations.cycles, 1);
+  assert.equal(after.regenerations.events[0].date, '2026-11-07');
+  assert.equal(after.months[0].cycles, 1);
+  assert.equal(after.months[0].gross_m3, before.months[0].gross_m3);
+  assert.equal(after.months[0].net_m3, before.months[0].net_m3);
+  assert.equal(after.typical.groups.holiday.days, before.typical.groups.holiday.days);
+  assert.equal(after.regenerations.volume_m3, before.regenerations.volume_m3);
+  assert.equal(after.regenerations.unknown_cycles, 0);
+});
+
+test('exclusion of one zero window does not resolve conflicting journal entries or discard positive water', () => {
+  const regenerationWindows = windows({'2026-11-04':0, '2026-11-07':0.2});
+  regenerationWindows.measurements['2026-11-04'].status = 'excluded_zero';
+  const treatment = {settings:{salt:{history:[...events, {...events[0]}]}}};
+  assert.equal(build({regenerationWindows, treatment}).regenerations.events[0].status, 'ambiguous');
+  regenerationWindows.measurements['2026-11-07'].status = 'excluded_zero';
+  const invalid = build({regenerationWindows});
+  assert.equal(invalid.regenerations.events[0].status, 'missing_volume');
+  assert.equal(invalid.regenerations.unknown_cycles, 1);
+});
+
 test('report model exposes the production entry points', () => {
   assert.equal(typeof model?.periods, 'function');
   assert.equal(typeof model?.build, 'function');
